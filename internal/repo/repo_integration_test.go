@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/interfin/interfin-ai-crm/internal/config"
 	"github.com/interfin/interfin-ai-crm/internal/db"
@@ -146,5 +147,69 @@ func TestPaymentEvents(t *testing.T) {
 	}
 	if len(evs) != 1 || evs[0].ToleranceOk == nil || !*evs[0].ToleranceOk {
 		t.Fatalf("payment_events: %+v", evs)
+	}
+}
+
+// TestTransitionStage — CAS-переход M5 против реального Postgres:
+// guard по from (приоритет §3.1), атомарный сброс anti_spam_count (§3.5)
+// и обновление last_activity_at — точки отсчёта TTL (CLAUDE.md §4.7).
+func TestTransitionStage(t *testing.T) {
+	leads, msgs, _ := testRepos(t)
+	ctx := context.Background()
+
+	// StageID задан явно, как в боевом создании лида (handlers/telegram.go):
+	// GORM вставляет zero value поверх DEFAULT 1 из схемы.
+	lead := &models.Lead{TelegramUserID: 555, StageID: 1}
+	if err := leads.Create(ctx, lead); err != nil {
+		t.Fatal(err)
+	}
+	// Наращиваем счётчики и «старим» активность.
+	for i := 0; i < 3; i++ {
+		if err := msgs.CreateInbound(ctx, &models.Message{LeadID: lead.ID, Content: "спам"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := leads.UpdateFields(ctx, lead.ID,
+		map[string]interface{}{"last_activity_at": time.Now().Add(-72 * time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+
+	// CAS с верным from: переход применён, счётчик сброшен, активность свежая.
+	ok, err := leads.TransitionStage(ctx, lead.ID, 1, 6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("CAS с верным from обязан пройти")
+	}
+	got, err := leads.GetByID(ctx, lead.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.StageID != 6 {
+		t.Errorf("stage_id=%d, ожидали 6", got.StageID)
+	}
+	if got.AntiSpamCount != 0 {
+		t.Errorf("anti_spam_count=%d, ожидали 0 (§3.5: сброс при переходе)", got.AntiSpamCount)
+	}
+	if got.MessageCount != 3 {
+		t.Errorf("message_count=%d, ожидали 3 — переход стадии его НЕ трогает (§3.2)", got.MessageCount)
+	}
+	if time.Since(got.LastActivityAt) > time.Minute {
+		t.Errorf("last_activity_at=%v не обновлён — TTL считался бы не от перехода (CLAUDE.md §4.7)",
+			got.LastActivityAt)
+	}
+
+	// CAS с устаревшим from: false, состояние не тронуто (приоритет §3.1).
+	ok, err = leads.TransitionStage(ctx, lead.ID, 1, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatal("CAS с устаревшим from обязан промахнуться")
+	}
+	got, _ = leads.GetByID(ctx, lead.ID)
+	if got.StageID != 6 {
+		t.Errorf("проигравший CAS перетёр стадию: %d", got.StageID)
 	}
 }

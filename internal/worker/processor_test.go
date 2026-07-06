@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/hibiken/asynq"
 
@@ -85,7 +86,27 @@ func (f *fakeLeads) UpdateFields(_ context.Context, id int64, fields map[string]
 			lead.TTLTaskID = &s
 		}
 	}
+	if v, ok := fields["escalated_at"]; ok { // M5: antispam:escalate
+		ts := v.(time.Time)
+		lead.EscalatedAt = &ts
+	}
+	if v, ok := fields["last_activity_at"]; ok { // M5: ResetTTL (IQ-4)
+		lead.LastActivityAt = v.(time.Time)
+	}
 	return nil
+}
+
+func (f *fakeLeads) TransitionStage(_ context.Context, id int64, from, to int16) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	lead, ok := f.leads[id]
+	if !ok || lead.StageID != from {
+		return false, nil
+	}
+	lead.StageID = to
+	lead.AntiSpamCount = 0
+	lead.LastActivityAt = time.Now() // точка отсчёта TTL (CLAUDE.md §4.7)
+	return true, nil
 }
 
 type fakeMsgs struct {

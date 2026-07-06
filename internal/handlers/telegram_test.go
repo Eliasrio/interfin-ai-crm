@@ -94,6 +94,10 @@ func (f *fakeLeads) UpdateFields(_ context.Context, id int64, fields map[string]
 	return nil
 }
 
+func (f *fakeLeads) TransitionStage(_ context.Context, _ int64, _, _ int16) (bool, error) {
+	panic("webhook не двигает стадии — это делает state machine в воркере (M5)")
+}
+
 type fakeMsgs struct {
 	inbound    []*models.Message
 	inboundErr error

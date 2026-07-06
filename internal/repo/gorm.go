@@ -77,6 +77,29 @@ func (r *leadRepo) UpdateFields(ctx context.Context, id int64, fields map[string
 	return nil
 }
 
+func (r *leadRepo) TransitionStage(ctx context.Context, id int64, from, to int16) (bool, error) {
+	// Один UPDATE: смена стадии и сброс per-stage счётчика anti-spam (§3.5)
+	// неразделимы — раздельные запросы оставили бы окно, где лид уже в новой
+	// стадии со старым счётчиком. Guard по from — приоритет §3.1: проигравший
+	// гонку переход не перетирает победителя, а получает false.
+	// last_activity_at двигается той же командой: TTL новой стадии взводится
+	// сразу после перехода и обязан считаться от той же точки, что и поле
+	// (CLAUDE.md §4.7); заодно catch-up ?updated_since (§10.3, M8/M9) увидит
+	// переходы, случившиеся без сообщений лида (ручные, TTL, payment).
+	res := r.db.WithContext(ctx).
+		Model(&models.Lead{}).
+		Where("id = ? AND stage_id = ?", id, from).
+		Updates(map[string]interface{}{
+			"stage_id":         to,
+			"anti_spam_count":  0,
+			"last_activity_at": gorm.Expr("NOW()"),
+		})
+	if res.Error != nil {
+		return false, fmt.Errorf("repo: transition stage: %w", res.Error)
+	}
+	return res.RowsAffected > 0, nil
+}
+
 // --- messages ---
 
 type messageRepo struct{ db *gorm.DB }

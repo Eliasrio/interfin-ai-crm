@@ -25,7 +25,9 @@ import (
 	"github.com/interfin/interfin-ai-crm/internal/config"
 	"github.com/interfin/interfin-ai-crm/internal/db"
 	"github.com/interfin/interfin-ai-crm/internal/embeddings"
+	"github.com/interfin/interfin-ai-crm/internal/events"
 	"github.com/interfin/interfin-ai-crm/internal/handlers"
+	"github.com/interfin/interfin-ai-crm/internal/kanban"
 	"github.com/interfin/interfin-ai-crm/internal/queue"
 	"github.com/interfin/interfin-ai-crm/internal/rag"
 	"github.com/interfin/interfin-ai-crm/internal/repo"
@@ -144,6 +146,22 @@ func run(log *slog.Logger) error {
 	}
 	summarizer := worker.NewSummarizer(leads, msgs, summaries, ai, worker.NewRedisLocker(rdb), log)
 
+	// --- M5: state machine Kanban (§3) — TTL, anti-spam, crm:events ---
+	ttlMgr := queue.NewTTLManager(cfg.Redis, leads)
+	defer func() {
+		if err := ttlMgr.Close(); err != nil {
+			log.Warn("ttl manager close", "error", err)
+		}
+	}()
+	antiSpamMgr := queue.NewAntiSpamManager(cfg.Redis)
+	defer func() {
+		if err := antiSpamMgr.Close(); err != nil {
+			log.Warn("antispam manager close", "error", err)
+		}
+	}()
+	machine := kanban.NewMachine(leads, msgs, ttlMgr, antiSpamMgr,
+		events.NewRedisPublisher(rdb), sender, cfg.Kanban, log)
+
 	wrk := worker.New(
 		cfg.Redis,
 		worker.NewProcessor(worker.ProcessorDeps{
@@ -156,6 +174,7 @@ func run(log *slog.Logger) error {
 			Summaries:     summaries,
 			SummaryEnq:    q,
 			SummaryEveryN: cfg.Kanban.SummaryEveryNMessages,
+			Kanban:        machine,
 			Log:           log,
 		}),
 		summarizer,
@@ -163,6 +182,7 @@ func run(log *slog.Logger) error {
 		cfg.Telegram.ManagerChatID,
 		log,
 	)
+	wrk.RegisterKanban(worker.NewKanbanHandlers(machine, log))
 	if err := wrk.Start(); err != nil {
 		return err
 	}

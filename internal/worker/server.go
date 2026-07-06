@@ -80,8 +80,8 @@ func New(
 	mux.HandleFunc(queue.TypeProcessInbound, proc.HandleProcessInbound)
 	// M4 §7.3: фоновая генерация сводки диалога (гонку гасит Redis-замок).
 	mux.HandleFunc(queue.TypeSummaryGenerate, summarizer.HandleSummaryGenerate)
-	// queue.TypeTTLExpire обработчика пока не имеет: ставить TTL-задачи
-	// начнёт M5, он же добавит handler смены стадии.
+	// Обработчики state machine (ttl:expire, antispam:*) подключает
+	// RegisterKanban до Start — боевая сборка cmd/server обязана его звать.
 
 	return &Server{
 		srv: asynq.NewServer(redisConnOpt(redisCfg), cfg),
@@ -100,6 +100,15 @@ func redisConnOpt(cfg config.RedisConfig) asynq.RedisConnOpt {
 		}
 	}
 	return asynq.RedisClientOpt{Addr: cfg.Addr, Password: cfg.Password}
+}
+
+// RegisterKanban подключает обработчики M5: ttl:expire (§3.4, тип задачи —
+// контракт M3) и antispam:followup / antispam:escalate (§3.5, AQ²-fix #8).
+// Зовётся до Start.
+func (s *Server) RegisterKanban(h *KanbanHandlers) {
+	s.mux.HandleFunc(queue.TypeTTLExpire, h.HandleTTLExpire)
+	s.mux.HandleFunc(queue.TypeAntiSpamFollowup, h.HandleAntiSpamFollowup)
+	s.mux.HandleFunc(queue.TypeAntiSpamEscalate, h.HandleAntiSpamEscalate)
 }
 
 // Start запускает воркер (неблокирующе — asynq.Server.Start).

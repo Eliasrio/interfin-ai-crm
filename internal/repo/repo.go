@@ -33,6 +33,13 @@ type LeadRepo interface {
 	// UpdateFields точечно меняет колонки по PK, например
 	// {"pending_task": true} при Redis down (§11.2).
 	UpdateFields(ctx context.Context, id int64, fields map[string]interface{}) error
+	// TransitionStage атомарно (CAS: WHERE stage_id = from) переводит лида
+	// в стадию to, сбрасывает anti_spam_count (§3.5) и обновляет
+	// last_activity_at — точку отсчёта TTL новой стадии (CLAUDE.md §4.7).
+	// false — лид уже не в from: конкурирующий переход победил
+	// (Manual/Payment переопределяют авто-триггеры, §3.1) — вызывающий
+	// обязан НЕ применять свой переход.
+	TransitionStage(ctx context.Context, id int64, from, to int16) (bool, error)
 }
 
 // MessageRepo — messages (§8.2).

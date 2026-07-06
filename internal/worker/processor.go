@@ -64,6 +64,10 @@ type ProcessorDeps struct {
 	SummaryEnq    queue.SummaryEnqueuer
 	SummaryEveryN int // kanban.summary_every_n_messages (§7.3: 15)
 
+	// M5 (state machine): авто-триггеры §3.2/§3.4/§3.5 на каждый inbound.
+	// nil — режим юнит-тестов M3 (диалог без Kanban-логики).
+	Kanban StateMachine
+
 	Log *slog.Logger
 }
 
@@ -96,6 +100,22 @@ func (p *Processor) HandleProcessInbound(ctx context.Context, t *asynq.Task) err
 	}
 	if err != nil {
 		return fmt.Errorf("worker: загрузка лида: %w", err)
+	}
+
+	// M5: авто-триггеры до генерации ответа — переход 1→2 (§3.2), reset TTL
+	// по активности (§3.4), anti-spam (§3.5). Замолчанному лиду не отвечаем:
+	// ни Claude, ни typing, ни summary (ошибка здесь = ретрай всей задачи,
+	// шаги state machine идемпотентны).
+	if d.Kanban != nil {
+		silenced, err := d.Kanban.OnInbound(ctx, lead)
+		if err != nil {
+			return fmt.Errorf("worker: kanban on inbound: %w", err)
+		}
+		if silenced {
+			log.Info("worker: anti-spam молчание, ответ не генерируется",
+				"stage_id", lead.StageID, "anti_spam_count", lead.AntiSpamCount)
+			return nil
+		}
 	}
 
 	history, err := d.Msgs.ListByLead(ctx, lead.ID, historyFetchLimit)

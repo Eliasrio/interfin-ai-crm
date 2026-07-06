@@ -76,6 +76,19 @@ func (f *fakeLeadRepo) UpdateFields(_ context.Context, id int64, fields map[stri
 	return nil
 }
 
+func (f *fakeLeadRepo) TransitionStage(_ context.Context, id int64, from, to int16) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	lead, ok := f.leads[id]
+	if !ok || lead.StageID != from {
+		return false, nil
+	}
+	lead.StageID = to
+	lead.AntiSpamCount = 0
+	lead.LastActivityAt = time.Now() // точка отсчёта TTL (CLAUDE.md §4.7)
+	return true, nil
+}
+
 func (f *fakeLeadRepo) ttlTaskID(t *testing.T, id int64) *string {
 	t.Helper()
 	f.mu.Lock()
