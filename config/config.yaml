@@ -1,0 +1,77 @@
+# Interfin AI-CRM — конфигурация (SRS §12).
+# Значения ${ENV_VAR} подставляются из окружения при старте (internal/config).
+# Секреты ТОЛЬКО через env / Docker secrets (CLAUDE.md §4.9).
+
+server: # не из §12: HTTP-порт приложения (§13.2 healthcheck ходит на :8080)
+  port: ${HTTP_PORT}
+
+telegram:
+  bot_token: ${TELEGRAM_BOT_TOKEN}
+  webhook_secret: ${TELEGRAM_WEBHOOK_SECRET}
+  webhook_url: ${TELEGRAM_WEBHOOK_URL}
+
+database:
+  dsn: ${POSTGRES_DSN}
+  max_open_conns: 36
+  prepare_stmt: false          # AQ²-fix #3
+  query_exec_mode: simple      # AQ²-fix #3 (pgx SimpleProtocol)
+
+redis:
+  addr: ${REDIS_ADDR}          # dev/staging: одиночный Redis (§13.1)
+  sentinel_addrs: []           # prod: [sentinel1:26379, sentinel2:26379, sentinel3:26379]
+  master_name: mymaster
+  password: ${REDIS_PASSWORD}
+
+auth:
+  jwt_private_key_path: ${JWT_PRIVATE_KEY_PATH}
+  jwt_public_key_path: ${JWT_PUBLIC_KEY_PATH}
+  access_token_ttl: 900        # 15 мин
+  refresh_token_ttl: 604800    # 7 дней
+
+claude:
+  api_key: ${ANTHROPIC_API_KEY}
+  model: claude-3-5-sonnet-20241022
+  claude_reply_tokens: 1000
+  token_budget:
+    system_prompt: 2000
+    summary: 1000
+    history: 4000
+    safety_buffer: 1000        # ИТОГО 9000
+  count_tokens_threshold: 7500 # AQ²-fix #7
+
+embeddings:                    # AQ²-fix #2: Voyage вместо OpenAI
+  provider: voyage
+  api_key: ${VOYAGE_API_KEY}
+  model: voyage-3
+  dimensions: 1024
+
+aws:
+  region: sa-east-1
+  bucket: interfin-crm-files
+  access_key: ${AWS_ACCESS_KEY_ID}
+  secret_key: ${AWS_SECRET_ACCESS_KEY}
+
+kanban:
+  anti_spam_limit: 25
+  anti_spam_followup_hours: 24 # AQ²-fix #8
+  anti_spam_escalate_hours: 48 # AQ²-fix #8
+  ttl_stage4_hours: 48
+  ttl_stage6_days: 5
+  underpaid_tolerance_pct: 2.0
+  summary_every_n_messages: 15
+
+rag:
+  cosine_threshold: 0.78
+  top_k: 5
+  fallback_on_miss: true
+
+lgpd:
+  retention_days: 90
+  preserve_financial_records: true          # AQ²-fix #4
+  erasure_anonymize_fields: [name, phone, tg_username]
+  erasure_hash_fields: [telegram_user_id]   # AQ²-fix #4
+
+monitoring:
+  prometheus_port: 9090
+  metrics_ip_allowlist: [10.0.0.0/8]        # AQ²-fix #10
+  alertmanager_url: ${ALERTMANAGER_URL}

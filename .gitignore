@@ -1,0 +1,13 @@
+# Секреты и локальное окружение — никогда в git (CLAUDE.md §4.9)
+.env
+*.pem
+
+# Бинарники и артефакты сборки
+bin/
+dist/
+*.exe
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store

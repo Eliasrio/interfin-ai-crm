@@ -1,0 +1,229 @@
+// Package config загружает config.yaml (SRS §12) с подстановкой ${ENV_VAR}.
+//
+// Правила (CLAUDE.md §4.9): секреты только через окружение. Если обязательная
+// переменная не задана — явная ошибка на старте, без тихих пустых значений.
+package config
+
+import (
+	"bytes"
+	"fmt"
+	"os"
+	"regexp"
+	"sort"
+	"strings"
+
+	"github.com/spf13/viper"
+)
+
+// Config — корневой объект конфигурации, доступный всем модулям (контракт M0).
+type Config struct {
+	Server     ServerConfig     `mapstructure:"server"`
+	Telegram   TelegramConfig   `mapstructure:"telegram"`
+	Database   DatabaseConfig   `mapstructure:"database"`
+	Redis      RedisConfig      `mapstructure:"redis"`
+	Auth       AuthConfig       `mapstructure:"auth"`
+	Claude     ClaudeConfig     `mapstructure:"claude"`
+	Embeddings EmbeddingsConfig `mapstructure:"embeddings"`
+	AWS        AWSConfig        `mapstructure:"aws"`
+	Kanban     KanbanConfig     `mapstructure:"kanban"`
+	RAG        RAGConfig        `mapstructure:"rag"`
+	LGPD       LGPDConfig       `mapstructure:"lgpd"`
+	Monitoring MonitoringConfig `mapstructure:"monitoring"`
+}
+
+type ServerConfig struct {
+	Port int `mapstructure:"port"`
+}
+
+type TelegramConfig struct {
+	BotToken      string `mapstructure:"bot_token"`
+	WebhookSecret string `mapstructure:"webhook_secret"`
+	WebhookURL    string `mapstructure:"webhook_url"`
+}
+
+type DatabaseConfig struct {
+	DSN           string `mapstructure:"dsn"`
+	MaxOpenConns  int    `mapstructure:"max_open_conns"`
+	PrepareStmt   bool   `mapstructure:"prepare_stmt"`    // AQ²-fix #3: всегда false
+	QueryExecMode string `mapstructure:"query_exec_mode"` // AQ²-fix #3: всегда "simple"
+}
+
+type RedisConfig struct {
+	Addr          string   `mapstructure:"addr"` // dev/staging: одиночный Redis
+	SentinelAddrs []string `mapstructure:"sentinel_addrs"`
+	MasterName    string   `mapstructure:"master_name"`
+	Password      string   `mapstructure:"password"`
+}
+
+type AuthConfig struct {
+	JWTPrivateKeyPath string `mapstructure:"jwt_private_key_path"`
+	JWTPublicKeyPath  string `mapstructure:"jwt_public_key_path"`
+	AccessTokenTTL    int    `mapstructure:"access_token_ttl"`  // секунды
+	RefreshTokenTTL   int    `mapstructure:"refresh_token_ttl"` // секунды
+}
+
+type TokenBudget struct {
+	SystemPrompt int `mapstructure:"system_prompt"`
+	Summary      int `mapstructure:"summary"`
+	History      int `mapstructure:"history"`
+	SafetyBuffer int `mapstructure:"safety_buffer"`
+}
+
+type ClaudeConfig struct {
+	APIKey               string      `mapstructure:"api_key"`
+	Model                string      `mapstructure:"model"`
+	ClaudeReplyTokens    int         `mapstructure:"claude_reply_tokens"`
+	TokenBudget          TokenBudget `mapstructure:"token_budget"`
+	CountTokensThreshold int         `mapstructure:"count_tokens_threshold"` // AQ²-fix #7
+}
+
+type EmbeddingsConfig struct { // AQ²-fix #2: Voyage, не OpenAI
+	Provider   string `mapstructure:"provider"`
+	APIKey     string `mapstructure:"api_key"`
+	Model      string `mapstructure:"model"`
+	Dimensions int    `mapstructure:"dimensions"`
+}
+
+type AWSConfig struct {
+	Region    string `mapstructure:"region"`
+	Bucket    string `mapstructure:"bucket"`
+	AccessKey string `mapstructure:"access_key"`
+	SecretKey string `mapstructure:"secret_key"`
+}
+
+type KanbanConfig struct {
+	AntiSpamLimit         int     `mapstructure:"anti_spam_limit"`
+	AntiSpamFollowupHours int     `mapstructure:"anti_spam_followup_hours"` // AQ²-fix #8
+	AntiSpamEscalateHours int     `mapstructure:"anti_spam_escalate_hours"` // AQ²-fix #8
+	TTLStage4Hours        int     `mapstructure:"ttl_stage4_hours"`
+	TTLStage6Days         int     `mapstructure:"ttl_stage6_days"`
+	UnderpaidTolerancePct float64 `mapstructure:"underpaid_tolerance_pct"`
+	SummaryEveryNMessages int     `mapstructure:"summary_every_n_messages"`
+}
+
+type RAGConfig struct {
+	CosineThreshold float64 `mapstructure:"cosine_threshold"`
+	TopK            int     `mapstructure:"top_k"`
+	FallbackOnMiss  bool    `mapstructure:"fallback_on_miss"`
+}
+
+type LGPDConfig struct {
+	RetentionDays            int      `mapstructure:"retention_days"`
+	PreserveFinancialRecords bool     `mapstructure:"preserve_financial_records"` // AQ²-fix #4
+	ErasureAnonymizeFields   []string `mapstructure:"erasure_anonymize_fields"`
+	ErasureHashFields        []string `mapstructure:"erasure_hash_fields"` // AQ²-fix #4
+}
+
+type MonitoringConfig struct {
+	PrometheusPort     int      `mapstructure:"prometheus_port"`
+	MetricsIPAllowlist []string `mapstructure:"metrics_ip_allowlist"` // AQ²-fix #10
+	AlertmanagerURL    string   `mapstructure:"alertmanager_url"`
+}
+
+// requiredEnv — переменные, без которых процесс не имеет права стартовать.
+// Список расширяется по мере эпиков (M2 добавит TELEGRAM_BOT_TOKEN и т.д.).
+var requiredEnv = []string{
+	"POSTGRES_DSN",
+	"REDIS_ADDR",
+}
+
+// defaultEnv — значения для незаданных НЕобязательных переменных.
+var defaultEnv = map[string]string{
+	"HTTP_PORT": "8080", // §13.2: healthcheck ходит на :8080
+}
+
+var envPlaceholder = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
+
+// Load читает YAML по пути path, подставляет ${ENV_VAR} и валидирует результат.
+func Load(path string) (*Config, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("config: read %s: %w", path, err)
+	}
+
+	expanded, missing := expandEnv(string(raw))
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		return nil, fmt.Errorf(
+			"config: обязательные переменные окружения не заданы: %s",
+			strings.Join(missing, ", "))
+	}
+
+	v := viper.New()
+	v.SetConfigType("yaml")
+	if err := v.ReadConfig(bytes.NewReader([]byte(expanded))); err != nil {
+		return nil, fmt.Errorf("config: parse yaml: %w", err)
+	}
+
+	var cfg Config
+	if err := v.Unmarshal(&cfg); err != nil {
+		return nil, fmt.Errorf("config: unmarshal: %w", err)
+	}
+
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
+	return &cfg, nil
+}
+
+// expandEnv подставляет ${VAR}: значение из окружения, иначе default,
+// иначе пустая строка + пометка в missing, если переменная обязательная.
+func expandEnv(src string) (string, []string) {
+	missingSet := map[string]bool{}
+	out := envPlaceholder.ReplaceAllStringFunc(src, func(match string) string {
+		name := envPlaceholder.FindStringSubmatch(match)[1]
+		if val, ok := os.LookupEnv(name); ok {
+			return val
+		}
+		if def, ok := defaultEnv[name]; ok {
+			return def
+		}
+		if isRequired(name) {
+			missingSet[name] = true
+		}
+		return ""
+	})
+
+	missing := make([]string, 0, len(missingSet))
+	for name := range missingSet {
+		missing = append(missing, name)
+	}
+	return out, missing
+}
+
+func isRequired(name string) bool {
+	for _, r := range requiredEnv {
+		if r == name {
+			return true
+		}
+	}
+	return false
+}
+
+// validate — страховка от пустых обязательных значений (например, переменная
+// задана, но пустой строкой) и от нарушения жёстких правил CLAUDE.md §4.
+func (c *Config) validate() error {
+	var problems []string
+
+	if c.Database.DSN == "" {
+		problems = append(problems, "database.dsn пуст (POSTGRES_DSN)")
+	}
+	if c.Redis.Addr == "" && len(c.Redis.SentinelAddrs) == 0 {
+		problems = append(problems, "redis: не задан ни addr (REDIS_ADDR), ни sentinel_addrs")
+	}
+	if c.Server.Port <= 0 || c.Server.Port > 65535 {
+		problems = append(problems, fmt.Sprintf("server.port вне диапазона: %d", c.Server.Port))
+	}
+	// AQ²-fix #3: pgbouncer transaction mode ломает prepared statements.
+	if c.Database.PrepareStmt {
+		problems = append(problems, "database.prepare_stmt должен быть false (AQ²-fix #3)")
+	}
+	if c.Database.QueryExecMode != "simple" {
+		problems = append(problems, "database.query_exec_mode должен быть \"simple\" (AQ²-fix #3)")
+	}
+
+	if len(problems) > 0 {
+		return fmt.Errorf("config: невалидная конфигурация: %s", strings.Join(problems, "; "))
+	}
+	return nil
+}
