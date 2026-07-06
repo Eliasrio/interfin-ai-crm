@@ -208,6 +208,38 @@ Retention-cron §9.1: `lgpd:retention` (asynq scheduler, 04:00 UTC ежедне�
 физически удаляет лидов с `deleted_at` старше 90 дней; платежи выживают
 с `lead_id=NULL` (FK `ON DELETE SET NULL`, миграция 0010).
 
+## React-доска Kanban (M10, §10)
+
+Фронт живёт в `web/` (React 18 + Vite, зависимости пришпилены точно).
+Node 20 ставится как Go — вручную в `~/sdk`
+(`export PATH=$HOME/sdk/node-v20.18.1-darwin-x64/bin:$PATH`).
+
+```bash
+cd web && npm install
+
+# Dev: Vite на :5173, прокси /api /auth /ws на :8080 (docker compose up -d)
+npm run dev
+
+# Prod: собрать и отдать тем же Go-процессом (server.static_dir: web/dist;
+# каталога нет — статика молча выключена, API не задет)
+npm run build
+
+# Юнит/компонентные тесты (DnD→PATCH, тихий refresh, WS-клиент, LGPD-гейт)
+npm test
+
+# e2e-приёмка против живого бэкенда (IQ-10 <500мс, AQ²-5 catch-up, DnD, LGPD).
+# Без E2E_BASE прогон скипается (конвенция POSTGRES_TEST_DSN/REDIS_TEST_ADDR).
+../scripts/m10_e2e_setup.sh   # тестовые менеджеры e2e-m10-* + лид
+E2E_BASE=http://localhost:8080 npm run test:e2e
+```
+
+Как это устроено: access-токен ТОЛЬКО в памяти (refresh — HttpOnly-cookie
+на /auth); WS `/ws/kanban` с `Sec-WebSocket-Protocol: Bearer.<token>`,
+обрыв → §10.3 (refresh → `GET /api/leads?updated_since=last_event_ts` →
+resubscribe); Redis down → Hub шлёт `polling_mode` и доска опрашивает REST
+раз в 5 с (как и при полной недоступности WS). Логика без React — в
+`web/src/lib/` (store/socket/api/auth), компоненты — в `web/src/components/`.
+
 ## Про критерии приёмки
 
 Метки `IQ-N` / `AQ²-N` в критериях ссылаются на review-историю ТЗ (баги,

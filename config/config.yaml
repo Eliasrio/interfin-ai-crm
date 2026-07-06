@@ -5,6 +5,9 @@
 server: # не из §12: HTTP-порт приложения (§13.2 healthcheck ходит на :8080)
   port: ${HTTP_PORT}
   rate_limit_per_min: 100      # §4.2: 100 req/min per IP на /api/* → 429
+  # M10: собранный React-фронт (npm run build в web/). Каталога нет —
+  # статика выключена (dev-фронт живёт на Vite-прокси, порт 5173).
+  static_dir: web/dist
 
 telegram:
   bot_token: ${TELEGRAM_BOT_TOKEN}

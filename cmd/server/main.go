@@ -288,6 +288,11 @@ func run(log *slog.Logger) error {
 		"rate_limit_per_min", cfg.Server.RateLimitPerMin,
 		"lgpd_retention_days", cfg.LGPD.RetentionDays)
 
+	// --- M10: React-доска (§10) — собранная статика web/dist с того же
+	// origin, что API (refresh-cookie и относительные URL). Не собрана —
+	// сервер остаётся чистым API, dev-фронт живёт на Vite-прокси.
+	server.ServeFrontend(router, cfg.Server.StaticDir, log)
+
 	// --- M9: WebSocket real-time push (§10) — Hub на общем Redis-клиенте
 	// (dev — single, prod — тот же Sentinel pool, §10/M11). Роут /ws/kanban
 	// вне группы /api: auth — JWT из Sec-WebSocket-Protocol (§5.3).

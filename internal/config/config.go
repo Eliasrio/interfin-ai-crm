@@ -37,6 +37,9 @@ type ServerConfig struct {
 	// RateLimitPerMin — §4.2: 100 запросов в минуту с одного IP на /api/*,
 	// сверх лимита — 429. 0 = лимит выключен (юнит-тестовые yaml).
 	RateLimitPerMin int `mapstructure:"rate_limit_per_min"`
+	// StaticDir — каталог собранного React-фронта (M10). Каталога нет —
+	// статика молча выключена, сервер остаётся чистым API.
+	StaticDir string `mapstructure:"static_dir"`
 }
 
 type TelegramConfig struct {

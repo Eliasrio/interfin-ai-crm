@@ -1,0 +1,30 @@
+{
+  "name": "interfin-crm-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "React 18 Kanban-доска менеджера Interfin AI-CRM (M10, SRS §10)",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:e2e": "vitest run --config e2e/vitest.config.js"
+  },
+  "dependencies": {
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "6.6.3",
+    "@testing-library/react": "16.1.0",
+    "@vitejs/plugin-react": "4.7.0",
+    "jsdom": "25.0.1",
+    "vite": "5.4.21",
+    "vitest": "2.1.9",
+    "ws": "8.18.0"
+  }
+}

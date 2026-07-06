@@ -8,6 +8,10 @@ bin/
 dist/
 *.exe
 
+# Frontend (M10)
+web/node_modules/
+web/dist/
+
 # IDE / OS
 .idea/
 .vscode/
