@@ -25,12 +25,25 @@ import (
 // Обработчик (перевод стадии) появится в M5; M3 даёт только управление.
 const TypeTTLExpire = "ttl:expire"
 
+// TypeTTLWarn — отложенная задача «TTL истекает через warnBefore» (M9):
+// обработчик публикует событие ttl_warning в crm:events, стадию не меняет.
+// Живёт парой с ttl:expire: взводится и снимается вместе с ней.
+const TypeTTLWarn = "ttl:warn"
+
 // ttlQueue — очередь TTL-задач (default, как у process:inbound).
 const ttlQueue = "default"
 
 // TTLPayload — полезная нагрузка ttl:expire.
 type TTLPayload struct {
 	LeadID int64 `json:"lead_id"`
+}
+
+// TTLWarnPayload — полезная нагрузка ttl:warn. StageID фиксирует стадию
+// на момент взвода: обработчик сверяет её с фактической и молча гасит
+// устаревшее предупреждение (стадия сменилась — TTL уже другой).
+type TTLWarnPayload struct {
+	LeadID  int64 `json:"lead_id"`
+	StageID int16 `json:"stage_id"`
 }
 
 // TTLDedupKey — детерминированный TaskID TTL-задачи лида (CLAUDE.md §4.5:
@@ -48,19 +61,31 @@ func TTLDedupKey(leadID int64) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// TTLWarnDedupKey — детерминированный TaskID ttl:warn лида. ID в БД не
+// хранится (как у antispam-задач M5): задача полностью управляется по
+// этому ключу.
+func TTLWarnDedupKey(leadID int64) string {
+	sum := sha256.Sum256([]byte(fmt.Sprintf("ttlwarn:%d", leadID)))
+	return hex.EncodeToString(sum[:])
+}
+
 // TTLManager — schedule/cancel TTL-задач лида (§6.4).
 type TTLManager struct {
 	client    *asynq.Client
 	inspector *asynq.Inspector
 	leads     repo.LeadRepo
+	// warnBefore — за сколько до ttl:expire срабатывает ttl:warn
+	// (kanban.ttl_warning_hours, M9). 0 = предупреждения не взводятся.
+	warnBefore time.Duration
 }
 
-func NewTTLManager(cfg config.RedisConfig, leads repo.LeadRepo) *TTLManager {
+func NewTTLManager(cfg config.RedisConfig, leads repo.LeadRepo, warnBefore time.Duration) *TTLManager {
 	opt := redisConnOpt(cfg)
 	return &TTLManager{
-		client:    asynq.NewClient(opt),
-		inspector: asynq.NewInspector(opt),
-		leads:     leads,
+		client:     asynq.NewClient(opt),
+		inspector:  asynq.NewInspector(opt),
+		leads:      leads,
+		warnBefore: warnBefore,
 	}
 }
 
@@ -82,6 +107,11 @@ func (m *TTLManager) Schedule(ctx context.Context, leadID int64, delay time.Dura
 	}
 	if err := m.deleteTask(TTLDedupKey(leadID)); err != nil {
 		return fmt.Errorf("queue: ttl schedule: снятие задачи по dedup-ключу: %w", err)
+	}
+	// Старое предупреждение снимается всегда, даже если новое не взведётся
+	// (warnBefore >= delay): иначе оно сработало бы по уже пересчитанному TTL.
+	if err := m.deleteTask(TTLWarnDedupKey(leadID)); err != nil {
+		return fmt.Errorf("queue: ttl schedule: снятие старого ttl:warn: %w", err)
 	}
 
 	payload, err := json.Marshal(TTLPayload{LeadID: leadID})
@@ -113,6 +143,35 @@ func (m *TTLManager) Schedule(ctx context.Context, leadID int64, delay time.Dura
 		}
 		return fmt.Errorf("queue: ttl schedule: сохранение id: %w", err)
 	}
+
+	return m.scheduleWarn(ctx, lead.StageID, leadID, delay)
+}
+
+// scheduleWarn взводит ttl:warn за warnBefore до истечения TTL (M9).
+// Для коротких TTL (delay <= warnBefore) предупреждение бессмысленно —
+// оно сработало бы немедленно, раньше события, о котором предупреждает.
+// Ошибка возвращается наверх: ретрай повторит весь Schedule идемпотентно.
+func (m *TTLManager) scheduleWarn(ctx context.Context, stageID int16, leadID int64, delay time.Duration) error {
+	if m.warnBefore <= 0 || delay <= m.warnBefore {
+		return nil
+	}
+	payload, err := json.Marshal(TTLWarnPayload{LeadID: leadID, StageID: stageID})
+	if err != nil {
+		return fmt.Errorf("queue: ttl warn: marshal: %w", err)
+	}
+	_, err = m.client.EnqueueContext(ctx,
+		asynq.NewTask(TypeTTLWarn, payload),
+		asynq.TaskID(TTLWarnDedupKey(leadID)), // CLAUDE.md §4.5; Unique — см. TTLDedupKey
+		asynq.ProcessIn(delay-m.warnBefore),
+		asynq.Queue(ttlQueue),
+		asynq.MaxRetry(maxRetry),
+	)
+	if errors.Is(err, asynq.ErrTaskIDConflict) {
+		return nil // конкурентный Schedule успел взвести — цель достигнута
+	}
+	if err != nil {
+		return fmt.Errorf("queue: ttl warn: enqueue: %w", err)
+	}
 	return nil
 }
 
@@ -122,6 +181,12 @@ func (m *TTLManager) Cancel(ctx context.Context, leadID int64) error {
 	lead, err := m.leads.GetByID(ctx, leadID)
 	if err != nil {
 		return fmt.Errorf("queue: ttl cancel: лид %d: %w", leadID, err)
+	}
+	// ttl:warn снимается независимо от ttl_task_id: expire-задача могла уже
+	// сработать (ttl_task_id очищен ActorTTL-веткой M5), а предупреждение —
+	// нет, если warn-окно ещё не наступило после re-anchor.
+	if err := m.deleteTask(TTLWarnDedupKey(leadID)); err != nil {
+		return fmt.Errorf("queue: ttl cancel: снятие ttl:warn: %w", err)
 	}
 	if lead.TTLTaskID == nil {
 		return nil // нечего снимать

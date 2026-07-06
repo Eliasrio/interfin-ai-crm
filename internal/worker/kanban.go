@@ -24,6 +24,8 @@ type StateMachine interface {
 	OnInbound(ctx context.Context, lead *models.Lead) (silenced bool, err error)
 	// HandleTTLExpire — ttl:expire: стадия истекла → Stage 8 (§3.4).
 	HandleTTLExpire(ctx context.Context, leadID int64) error
+	// HandleTTLWarning — ttl:warn: TTL скоро истечёт → событие ttl_warning (M9).
+	HandleTTLWarning(ctx context.Context, p queue.TTLWarnPayload) error
 	// HandleAntiSpamFollowup — antispam:followup: follow-up через 24ч (§3.5).
 	HandleAntiSpamFollowup(ctx context.Context, p queue.AntiSpamPayload) error
 	// HandleAntiSpamEscalate — antispam:escalate: эскалация через 48ч (§3.5).
@@ -47,6 +49,15 @@ func (h *KanbanHandlers) HandleTTLExpire(ctx context.Context, t *asynq.Task) err
 		return fmt.Errorf("worker: payload ttl:expire не разобран: %v: %w", err, asynq.SkipRetry)
 	}
 	return h.machine.HandleTTLExpire(ctx, p.LeadID)
+}
+
+// HandleTTLWarn — handler ttl:warn (M9).
+func (h *KanbanHandlers) HandleTTLWarn(ctx context.Context, t *asynq.Task) error {
+	var p queue.TTLWarnPayload
+	if err := json.Unmarshal(t.Payload(), &p); err != nil {
+		return fmt.Errorf("worker: payload ttl:warn не разобран: %v: %w", err, asynq.SkipRetry)
+	}
+	return h.machine.HandleTTLWarning(ctx, p)
 }
 
 // HandleAntiSpamFollowup — handler antispam:followup.

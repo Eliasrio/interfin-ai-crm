@@ -76,7 +76,7 @@ func newPayIntEnv(t *testing.T) *payIntEnv {
 	}
 
 	redisCfg := config.RedisConfig{Addr: redisAddr}
-	ttlMgr := queue.NewTTLManager(redisCfg, leads)
+	ttlMgr := queue.NewTTLManager(redisCfg, leads, 0)
 	spamMgr := queue.NewAntiSpamManager(redisCfg)
 	t.Cleanup(func() {
 		ttlMgr.Close()

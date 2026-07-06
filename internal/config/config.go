@@ -99,11 +99,15 @@ type AWSConfig struct {
 }
 
 type KanbanConfig struct {
-	AntiSpamLimit         int     `mapstructure:"anti_spam_limit"`
-	AntiSpamFollowupHours int     `mapstructure:"anti_spam_followup_hours"` // AQ²-fix #8
-	AntiSpamEscalateHours int     `mapstructure:"anti_spam_escalate_hours"` // AQ²-fix #8
-	TTLStage4Hours        int     `mapstructure:"ttl_stage4_hours"`
-	TTLStage6Days         int     `mapstructure:"ttl_stage6_days"`
+	AntiSpamLimit         int `mapstructure:"anti_spam_limit"`
+	AntiSpamFollowupHours int `mapstructure:"anti_spam_followup_hours"` // AQ²-fix #8
+	AntiSpamEscalateHours int `mapstructure:"anti_spam_escalate_hours"` // AQ²-fix #8
+	TTLStage4Hours        int `mapstructure:"ttl_stage4_hours"`
+	TTLStage6Days         int `mapstructure:"ttl_stage6_days"`
+	// TTLWarningHours — за сколько часов до ttl:expire публикуется событие
+	// ttl_warning (M9). 0 = предупреждения выключены. В SRS порога нет
+	// (§4.3 отсутствует в v2.3) — значение продуктовое, задаётся конфигом.
+	TTLWarningHours       int     `mapstructure:"ttl_warning_hours"`
 	UnderpaidTolerancePct float64 `mapstructure:"underpaid_tolerance_pct"`
 	SummaryEveryNMessages int     `mapstructure:"summary_every_n_messages"`
 }
@@ -278,6 +282,10 @@ func (c *Config) validate() error {
 	if c.Server.RateLimitPerMin < 0 {
 		problems = append(problems, fmt.Sprintf(
 			"server.rate_limit_per_min отрицателен: %d (§4.2)", c.Server.RateLimitPerMin))
+	}
+	if c.Kanban.TTLWarningHours < 0 {
+		problems = append(problems, fmt.Sprintf(
+			"kanban.ttl_warning_hours отрицателен: %d (M9)", c.Kanban.TTLWarningHours))
 	}
 	// M8: lgpd-секция проверяется, когда заполнена (юнит-тестовые yaml без
 	// неё валидны — LGPD-ручки там не собираются). Пустая соль при заданной

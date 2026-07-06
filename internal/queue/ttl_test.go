@@ -2,6 +2,7 @@ package queue
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 	"testing"
@@ -138,7 +139,7 @@ func TestTTLManager_ScheduleRescheduleCancel(t *testing.T) {
 
 	const leadID = int64(31)
 	leads := newFakeLeadRepo(&models.Lead{ID: leadID, TelegramUserID: 111})
-	m := NewTTLManager(config.RedisConfig{Addr: addr}, leads)
+	m := NewTTLManager(config.RedisConfig{Addr: addr}, leads, 0)
 	defer m.Close()
 
 	ctx := context.Background()
@@ -190,5 +191,75 @@ func TestTTLManager_ScheduleRescheduleCancel(t *testing.T) {
 	// Повторный Cancel — no-op, не ошибка (задачи уже нет).
 	if err := m.Cancel(ctx, leadID); err != nil {
 		t.Errorf("повторный cancel: %v", err)
+	}
+}
+
+// TestTTLManager_WarnLifecycle — M9: ttl:warn живёт парой с ttl:expire —
+// взводится за warnBefore до истечения, переставляется при reschedule,
+// снимается Cancel'ом; для короткого TTL (delay <= warnBefore) не взводится.
+func TestTTLManager_WarnLifecycle(t *testing.T) {
+	addr := testRedis(t)
+	const leadID = int64(77)
+	leads := newFakeLeadRepo(&models.Lead{ID: leadID, TelegramUserID: 777, StageID: 4})
+	const warnBefore = 6 * time.Hour
+	m := NewTTLManager(config.RedisConfig{Addr: addr}, leads, warnBefore)
+	defer m.Close()
+	insp := asynq.NewInspector(asynq.RedisClientOpt{Addr: addr})
+	defer insp.Close()
+	// Чистим хвосты прошлых прогонов по детерминированным ключам.
+	for _, id := range []string{TTLDedupKey(leadID), TTLWarnDedupKey(leadID)} {
+		if err := insp.DeleteTask(ttlQueue, id); err != nil &&
+			!errors.Is(err, asynq.ErrTaskNotFound) && !errors.Is(err, asynq.ErrQueueNotFound) {
+			t.Fatalf("очистка %s: %v", id, err)
+		}
+	}
+	ctx := context.Background()
+
+	// TTL 48ч, warn за 6ч → ttl:warn сработает через ~42ч.
+	if err := m.Schedule(ctx, leadID, 48*time.Hour); err != nil {
+		t.Fatalf("schedule: %v", err)
+	}
+	info, err := insp.GetTaskInfo(ttlQueue, TTLWarnDedupKey(leadID))
+	if err != nil {
+		t.Fatalf("ttl:warn не взведён: %v", err)
+	}
+	if info.Type != TypeTTLWarn {
+		t.Fatalf("тип задачи %q, ожидали %q", info.Type, TypeTTLWarn)
+	}
+	var p TTLWarnPayload
+	if err := json.Unmarshal(info.Payload, &p); err != nil {
+		t.Fatalf("payload ttl:warn: %v", err)
+	}
+	if p.LeadID != leadID || p.StageID != 4 {
+		t.Fatalf("payload = %+v, ожидали lead %d стадия 4", p, leadID)
+	}
+	wantETA := time.Now().Add(48*time.Hour - warnBefore)
+	if diff := info.NextProcessAt.Sub(wantETA); diff < -time.Minute || diff > time.Minute {
+		t.Errorf("ttl:warn сработает в %v, ожидали ~%v", info.NextProcessAt, wantETA)
+	}
+
+	// Reschedule коротким TTL: warn бессмыслен (сработал бы сразу) — снят.
+	if err := m.Schedule(ctx, leadID, time.Hour); err != nil {
+		t.Fatalf("reschedule: %v", err)
+	}
+	if _, err := insp.GetTaskInfo(ttlQueue, TTLWarnDedupKey(leadID)); !errors.Is(err, asynq.ErrTaskNotFound) {
+		t.Fatalf("ttl:warn при delay <= warnBefore должен быть снят, err=%v", err)
+	}
+
+	// Возврат к длинному TTL и Cancel: снимаются обе задачи.
+	if err := m.Schedule(ctx, leadID, 48*time.Hour); err != nil {
+		t.Fatalf("reschedule 2: %v", err)
+	}
+	if _, err := insp.GetTaskInfo(ttlQueue, TTLWarnDedupKey(leadID)); err != nil {
+		t.Fatalf("ttl:warn после повторного schedule: %v", err)
+	}
+	if err := m.Cancel(ctx, leadID); err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+	if _, err := insp.GetTaskInfo(ttlQueue, TTLWarnDedupKey(leadID)); !errors.Is(err, asynq.ErrTaskNotFound) {
+		t.Fatalf("ttl:warn после Cancel должен быть снят, err=%v", err)
+	}
+	if _, err := insp.GetTaskInfo(ttlQueue, TTLDedupKey(leadID)); !errors.Is(err, asynq.ErrTaskNotFound) {
+		t.Fatalf("ttl:expire после Cancel должен быть снят, err=%v", err)
 	}
 }

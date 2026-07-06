@@ -30,15 +30,20 @@ func TestVerifyWSProtocol(t *testing.T) {
 }
 
 // §5.3: просрочка при upgrade — M9 маппит её в close 4001, поэтому
-// ошибка обязана быть различимой.
+// ошибка обязана быть различимой, а субпротокол — возвращаться и при
+// ней: close-код доедет до браузера только после успешного handshake
+// с эхом субпротокола.
 func TestVerifyWSProtocolExpired(t *testing.T) {
 	iss, _ := testPair(t, -time.Minute)
 	_, ver := testPair(t, 15*time.Minute)
 	token, _ := iss.Issue("42", RoleManager)
 
-	_, _, err := ver.VerifyWSProtocol("Bearer." + token)
+	_, proto, err := ver.VerifyWSProtocol("Bearer." + token)
 	if !errors.Is(err, ErrTokenExpired) {
 		t.Fatalf("ожидался ErrTokenExpired, получено: %v", err)
+	}
+	if want := "Bearer." + token; proto != want {
+		t.Fatalf("субпротокол при просрочке = %q, ожидали %q", proto, want)
 	}
 }
 

@@ -306,6 +306,41 @@ func (m *Machine) HandleTTLExpire(ctx context.Context, leadID int64) error {
 	return err
 }
 
+// HandleTTLWarning — задача ttl:warn (M9): до истечения TTL стадии осталось
+// меньше kanban.ttl_warning_hours → событие ttl_warning на доску (crm:events).
+// Стадию не меняет; publish fire-and-forget — потерянное предупреждение не
+// ретраится (как и остальные события §10.1).
+//
+// Guard: стадия лида должна совпадать со стадией на момент взвода — иначе
+// TTL уже другой и предупреждение устарело. Re-anchor TTL внутри той же
+// стадии guard не ловит (Schedule снимает pending-предупреждение, но гонку
+// «сработало ровно в момент reset» не исключить) — раннее предупреждение
+// безвредно, доска просто подсветит карточку раньше.
+func (m *Machine) HandleTTLWarning(ctx context.Context, p queue.TTLWarnPayload) error {
+	lead, err := m.leads.GetByID(ctx, p.LeadID)
+	if errors.Is(err, repo.ErrNotFound) {
+		return nil // лид стёрт (LGPD) — предупреждение неактуально
+	}
+	if err != nil {
+		return fmt.Errorf("kanban: ttl warning: лид %d: %w", p.LeadID, err)
+	}
+	if lead.StageID != p.StageID {
+		m.log.Info("kanban: ttl warning устарело, пропуск",
+			"lead_id", p.LeadID, "task_stage", p.StageID, "stage_id", lead.StageID)
+		return nil
+	}
+	m.publish(ctx, events.Event{
+		Type:    events.TypeTTLWarning,
+		LeadID:  lead.ID,
+		StageID: lead.StageID,
+		Reason: fmt.Sprintf("ttl стадии %d истекает через ~%dч",
+			lead.StageID, m.cfg.TTLWarningHours),
+	})
+	m.log.Info("kanban: ttl warning опубликован",
+		"lead_id", lead.ID, "stage_id", lead.StageID)
+	return nil
+}
+
 // HandleAntiSpamFollowup — задача antispam:followup (§3.5): спустя 24ч
 // молчания бот отправляет ОДНО follow-up-сообщение.
 func (m *Machine) HandleAntiSpamFollowup(ctx context.Context, p queue.AntiSpamPayload) error {

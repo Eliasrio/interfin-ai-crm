@@ -23,6 +23,7 @@ type fakeMachine struct {
 	err       error
 	onInbound int
 	ttlExpire []int64
+	ttlWarns  []queue.TTLWarnPayload
 	followups []queue.AntiSpamPayload
 	escalates []queue.AntiSpamPayload
 }
@@ -38,6 +39,13 @@ func (f *fakeMachine) HandleTTLExpire(_ context.Context, leadID int64) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.ttlExpire = append(f.ttlExpire, leadID)
+	return f.err
+}
+
+func (f *fakeMachine) HandleTTLWarning(_ context.Context, p queue.TTLWarnPayload) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ttlWarns = append(f.ttlWarns, p)
 	return f.err
 }
 

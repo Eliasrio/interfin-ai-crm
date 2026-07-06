@@ -16,8 +16,10 @@ const wsProtocolPrefix = "Bearer."
 //
 // Возвращает claims и сам субпротокол: сервер ОБЯЗАН эхом вернуть его в
 // Sec-WebSocket-Protocol ответа, иначе браузер разрывает соединение.
-// Просрочка — ErrTokenExpired (M9 маппит в close 4001 → reconnect §10.3),
-// отсутствие/битость — ErrTokenInvalid.
+// Просрочка — ErrTokenExpired, субпротокол при этом ТОЖЕ возвращается:
+// close 4001 (§5.3) доедет до браузера только после успешного handshake,
+// поэтому M9 обязан завершить upgrade с эхом и лишь затем закрыть 4001
+// (→ reconnect с catch-up §10.3). Отсутствие/битость — ErrTokenInvalid.
 func (v *Verifier) VerifyWSProtocol(header string) (*Claims, string, error) {
 	for _, proto := range strings.Split(header, ",") {
 		proto = strings.TrimSpace(proto)
@@ -26,7 +28,7 @@ func (v *Verifier) VerifyWSProtocol(header string) (*Claims, string, error) {
 		}
 		claims, err := v.Verify(proto[len(wsProtocolPrefix):])
 		if err != nil {
-			return nil, "", err
+			return nil, proto, err
 		}
 		return claims, proto, nil
 	}

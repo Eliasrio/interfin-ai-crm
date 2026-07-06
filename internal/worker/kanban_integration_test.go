@@ -77,7 +77,7 @@ func newKanbanRig(t *testing.T, lead *models.Lead, followupH, escalateH int) *ka
 		pub:      &fakePublisher{},
 		redisCfg: redisCfg,
 	}
-	rig.ttlMgr = queue.NewTTLManager(redisCfg, rig.leads)
+	rig.ttlMgr = queue.NewTTLManager(redisCfg, rig.leads, 0)
 	rig.spamMgr = queue.NewAntiSpamManager(redisCfg)
 	t.Cleanup(func() {
 		rig.ttlMgr.Close()

@@ -36,6 +36,7 @@ import (
 	"github.com/interfin/interfin-ai-crm/internal/server"
 	"github.com/interfin/interfin-ai-crm/internal/telegram"
 	"github.com/interfin/interfin-ai-crm/internal/worker"
+	"github.com/interfin/interfin-ai-crm/internal/ws"
 )
 
 // redisPinger адаптирует redis.UniversalClient к server.Pinger.
@@ -151,7 +152,8 @@ func run(log *slog.Logger) error {
 	summarizer := worker.NewSummarizer(leads, msgs, summaries, ai, worker.NewRedisLocker(rdb), log)
 
 	// --- M5: state machine Kanban (§3) — TTL, anti-spam, crm:events ---
-	ttlMgr := queue.NewTTLManager(cfg.Redis, leads)
+	ttlMgr := queue.NewTTLManager(cfg.Redis, leads,
+		time.Duration(cfg.Kanban.TTLWarningHours)*time.Hour) // M9: ttl_warning
 	defer func() {
 		if err := ttlMgr.Close(); err != nil {
 			log.Warn("ttl manager close", "error", err)
@@ -285,6 +287,16 @@ func run(log *slog.Logger) error {
 	log.Info("rest api registered",
 		"rate_limit_per_min", cfg.Server.RateLimitPerMin,
 		"lgpd_retention_days", cfg.LGPD.RetentionDays)
+
+	// --- M9: WebSocket real-time push (§10) — Hub на общем Redis-клиенте
+	// (dev — single, prod — тот же Sentinel pool, §10/M11). Роут /ws/kanban
+	// вне группы /api: auth — JWT из Sec-WebSocket-Protocol (§5.3).
+	hub := ws.NewHub(ws.DefaultTimings, log)
+	hubCtx, hubCancel := context.WithCancel(context.Background())
+	defer hubCancel() // гасит подписку и отключает WS-клиентов при shutdown
+	go hub.Run(hubCtx, rdb)
+	ws.NewHandler(hub, auth.NewVerifier(pubKey), log).Register(router)
+	log.Info("websocket hub started", "endpoint", "/ws/kanban")
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.Server.Port),

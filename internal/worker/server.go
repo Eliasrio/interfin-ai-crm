@@ -107,6 +107,7 @@ func redisConnOpt(cfg config.RedisConfig) asynq.RedisConnOpt {
 // Зовётся до Start.
 func (s *Server) RegisterKanban(h *KanbanHandlers) {
 	s.mux.HandleFunc(queue.TypeTTLExpire, h.HandleTTLExpire)
+	s.mux.HandleFunc(queue.TypeTTLWarn, h.HandleTTLWarn) // M9: событие ttl_warning
 	s.mux.HandleFunc(queue.TypeAntiSpamFollowup, h.HandleAntiSpamFollowup)
 	s.mux.HandleFunc(queue.TypeAntiSpamEscalate, h.HandleAntiSpamEscalate)
 }

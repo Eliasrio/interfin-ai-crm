@@ -689,3 +689,45 @@ func TestAntiSpam_EscalateMarksLeadAndNotifiesManager(t *testing.T) {
 		t.Errorf("manager_escalation не опубликован: %v", evs)
 	}
 }
+
+// --- ttl_warning (M9): TTL стадии скоро истечёт → событие на доску ---
+
+func TestHandleTTLWarning_PublishesEvent(t *testing.T) {
+	fx := newFixture(&models.Lead{ID: 9, TelegramUserID: 900, StageID: StageUnpaid})
+	if err := fx.machine.HandleTTLWarning(context.Background(),
+		queue.TTLWarnPayload{LeadID: 9, StageID: StageUnpaid}); err != nil {
+		t.Fatalf("HandleTTLWarning: %v", err)
+	}
+	evs := fx.pub.byType(events.TypeTTLWarning)
+	if len(evs) != 1 {
+		t.Fatalf("ttl_warning событий: %d, ожидали 1", len(evs))
+	}
+	if evs[0].LeadID != 9 || evs[0].StageID != StageUnpaid {
+		t.Fatalf("payload события: %+v", evs[0])
+	}
+}
+
+// Guard: стадия сменилась в окно между взводом ttl:warn и срабатыванием —
+// предупреждение устарело, события нет, ошибки нет.
+func TestHandleTTLWarning_StaleStageSkips(t *testing.T) {
+	fx := newFixture(&models.Lead{ID: 9, TelegramUserID: 900, StageID: StageLive})
+	if err := fx.machine.HandleTTLWarning(context.Background(),
+		queue.TTLWarnPayload{LeadID: 9, StageID: StageUnpaid}); err != nil {
+		t.Fatalf("HandleTTLWarning: %v", err)
+	}
+	if evs := fx.pub.byType(events.TypeTTLWarning); len(evs) != 0 {
+		t.Fatalf("устаревшее предупреждение опубликовано: %+v", evs)
+	}
+}
+
+// Лид стёрт (LGPD) — тихий no-op, как у остальных отложенных задач.
+func TestHandleTTLWarning_ErasedLeadSkips(t *testing.T) {
+	fx := newFixture()
+	if err := fx.machine.HandleTTLWarning(context.Background(),
+		queue.TTLWarnPayload{LeadID: 404, StageID: StageUnpaid}); err != nil {
+		t.Fatalf("HandleTTLWarning по стёртому лиду: %v", err)
+	}
+	if evs := fx.pub.byType(events.TypeTTLWarning); len(evs) != 0 {
+		t.Fatalf("событие по стёртому лиду: %+v", evs)
+	}
+}

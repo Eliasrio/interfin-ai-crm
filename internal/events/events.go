@@ -28,12 +28,13 @@ import (
 // Channel — канал Redis pub/sub для всех real-time событий CRM (§10.1).
 const Channel = "crm:events"
 
-// Типы событий (M9 + §3.5). ttl_warning добавит M9.
+// Типы событий (M9 + §3.5).
 const (
 	TypeStageChange       = "stage_change"
 	TypeAntiSpamAlert     = "antispam_alert"     // §3.5: лимит 25 inbound достигнут
 	TypeManagerEscalation = "manager_escalation" // AQ²-fix #8: 48ч молчания
 	TypePaymentReceived   = "payment_received"   // M6 §3.3: платёж принят; tolerance решил стадию
+	TypeTTLWarning        = "ttl_warning"        // M9: до истечения TTL стадии осталось < kanban.ttl_warning_hours
 )
 
 // Event — единица канала crm:events. Одна структура на все типы:
