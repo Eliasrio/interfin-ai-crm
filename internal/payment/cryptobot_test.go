@@ -44,10 +44,10 @@ func TestVerifySignature_Invalid(t *testing.T) {
 	cases := map[string]struct {
 		token, sig string
 	}{
-		"чужой токен":       {testToken, Sign("999:otherToken", body)},
-		"мусор вместо hex":  {testToken, "не-hex-строка"},
-		"пустая подпись":    {testToken, ""},
-		"пустой токен":      {"", Sign(testToken, body)}, // misconfiguration ≠ пускать всех
+		"чужой токен":        {testToken, Sign("999:otherToken", body)},
+		"мусор вместо hex":   {testToken, "не-hex-строка"},
+		"пустая подпись":     {testToken, ""},
+		"пустой токен":       {"", Sign(testToken, body)}, // misconfiguration ≠ пускать всех
 		"подпись иного тела": {testToken, Sign(testToken, []byte(`{"update_id":43}`))},
 	}
 	for name, tc := range cases {
