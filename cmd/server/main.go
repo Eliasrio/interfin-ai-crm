@@ -29,6 +29,7 @@ import (
 	"github.com/interfin/interfin-ai-crm/internal/events"
 	"github.com/interfin/interfin-ai-crm/internal/handlers"
 	"github.com/interfin/interfin-ai-crm/internal/kanban"
+	"github.com/interfin/interfin-ai-crm/internal/metrics"
 	"github.com/interfin/interfin-ai-crm/internal/payment"
 	"github.com/interfin/interfin-ai-crm/internal/queue"
 	"github.com/interfin/interfin-ai-crm/internal/rag"
@@ -122,6 +123,44 @@ func run(log *slog.Logger) error {
 			log.Warn("queue close", "error", err)
 		}
 	}()
+
+	// --- M11 §14: Prometheus — отдельный listener /metrics за IP-allowlist
+	// (AQ²-10; снаружи периметра второй слой — Nginx mTLS, ops/nginx) +
+	// поллер asynq_queue_size (dead letter для алерта §6.3).
+	if cfg.Monitoring.PrometheusPort > 0 {
+		metricsSrv, err := metrics.NewServer(
+			cfg.Monitoring.PrometheusPort, cfg.Monitoring.MetricsIPAllowlist)
+		if err != nil {
+			return err
+		}
+		go func() {
+			if err := metricsSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Error("metrics server", "error", err)
+			}
+		}()
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			if err := metricsSrv.Shutdown(shutdownCtx); err != nil {
+				log.Warn("metrics server shutdown", "error", err)
+			}
+		}()
+
+		statsCtx, statsCancel := context.WithCancel(context.Background())
+		defer statsCancel()
+		go metrics.NewQueueStats(queue.ConnOpt(cfg.Redis), metrics.QueueStatsInterval, log).Run(statsCtx)
+		log.Info("metrics server started",
+			"port", cfg.Monitoring.PrometheusPort,
+			"allowlist", cfg.Monitoring.MetricsIPAllowlist)
+	}
+
+	// --- M11 §11.2: recovery-cron — вторая половина graceful degradation.
+	// Вебхук при Redis down сохраняет inbound и ставит pending_task=TRUE;
+	// этот cron раз в 30с перевыставляет задачи, когда Redis ожил.
+	recoveryCtx, recoveryCancel := context.WithCancel(context.Background())
+	defer recoveryCancel()
+	go queue.NewRecovery(leads, q, queue.RecoveryInterval, log).Run(recoveryCtx)
+	log.Info("pending_task recovery cron started", "interval", queue.RecoveryInterval.String())
 
 	// --- Telegram: webhook-режим, никакого polling (CLAUDE.md §4.10) ---
 	bot, err := telegram.NewWebhookBot(cfg.Telegram, log, false)

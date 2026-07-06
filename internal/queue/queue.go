@@ -67,6 +67,13 @@ func NewClient(cfg config.RedisConfig) *Client {
 	return &Client{c: asynq.NewClient(redisConnOpt(cfg))}
 }
 
+// ConnOpt — выбор single/Sentinel подключения к Redis для asynq (§11.1).
+// Единая точка для клиента очереди, воркера (M3) и Inspector'а метрик (M11):
+// разъехавшиеся настройки означали бы, что клиент и воркер смотрят в разные Redis.
+func ConnOpt(cfg config.RedisConfig) asynq.RedisConnOpt {
+	return redisConnOpt(cfg)
+}
+
 func redisConnOpt(cfg config.RedisConfig) asynq.RedisConnOpt {
 	if len(cfg.SentinelAddrs) > 0 {
 		return asynq.RedisFailoverClientOpt{

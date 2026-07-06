@@ -603,3 +603,13 @@ func TestRateLimit101st(t *testing.T) {
 	w := rig.do(t, http.MethodGet, "/api/leads", "", nil)
 	wantStatus(t, w, http.StatusTooManyRequests, "ERR_RATE_LIMITED")
 }
+
+// Заглушки M11 (recovery-cron pending_task работает с боевым leadRepo,
+// в этих тестах не участвует).
+func (f *apiLeads) ListPendingTask(context.Context, int) ([]models.Lead, error) {
+	panic("pending_task здесь не используется (M11)")
+}
+
+func (f *apiLeads) ClearPendingTask(context.Context, int64, int) (bool, error) {
+	panic("pending_task здесь не используется (M11)")
+}

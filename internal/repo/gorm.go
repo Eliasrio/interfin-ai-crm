@@ -78,6 +78,39 @@ func (r *leadRepo) UpdateFields(ctx context.Context, id int64, fields map[string
 	return nil
 }
 
+func (r *leadRepo) ListPendingTask(ctx context.Context, limit int) ([]models.Lead, error) {
+	if limit <= 0 {
+		return nil, fmt.Errorf("repo: list pending task: limit %d невалиден", limit)
+	}
+	var leads []models.Lead
+	// WHERE pending_task = TRUE попадает в частичный индекс idx_leads_pending
+	// (0003). id ASC — лиды, ждущие дольше всех, восстанавливаются первыми.
+	err := r.db.WithContext(ctx).
+		Where("pending_task = TRUE").
+		Order("id ASC").
+		Limit(limit).
+		Find(&leads).Error
+	if err != nil {
+		return nil, fmt.Errorf("repo: list pending task: %w", err)
+	}
+	return leads, nil
+}
+
+func (r *leadRepo) ClearPendingTask(ctx context.Context, id int64, seenMessageCount int) (bool, error) {
+	// Guard по message_count — CAS против гонки с вебхуком (§11.2): между
+	// нашим enqueue и этим UPDATE лид мог прислать новое сообщение, а его
+	// enqueue — снова упасть с pending_task=TRUE. Снятие флага без guard'а
+	// потеряло бы то сообщение до следующего inbound.
+	res := r.db.WithContext(ctx).
+		Model(&models.Lead{}).
+		Where("id = ? AND pending_task = TRUE AND message_count = ?", id, seenMessageCount).
+		Update("pending_task", false)
+	if res.Error != nil {
+		return false, fmt.Errorf("repo: clear pending task: %w", res.Error)
+	}
+	return res.RowsAffected > 0, nil
+}
+
 func (r *leadRepo) List(ctx context.Context, p ListLeadsParams) ([]models.Lead, int64, error) {
 	if p.Limit <= 0 {
 		return nil, 0, fmt.Errorf("repo: list leads: limit %d невалиден", p.Limit)

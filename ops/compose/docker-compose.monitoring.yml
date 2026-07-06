@@ -1,0 +1,47 @@
+# docker-compose.monitoring.yml — ЛОКАЛЬНЫЙ monitoring-стек (M11 §14) поверх
+# dev-окружения: смоук критерия «все SLO-метрики видны в Grafana, алерты
+# срабатывают» без боевого сервера. Prod-вариант — те же конфиги/дашборды
+# ops/, но внутри docker-compose.prod.yml.
+#
+#   docker compose up -d                                   # dev-стенд (app:9091)
+#   docker compose -f ops/compose/docker-compose.monitoring.yml up -d
+#   Grafana:      http://localhost:3001  (admin/admin — только dev!)
+#   Prometheus:   http://localhost:9095
+#   Alertmanager: http://localhost:9096
+
+name: interfin-monitoring
+
+services:
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    command: [--config.file=/etc/prometheus/prometheus.yml]
+    volumes:
+      - ./prometheus.dev.yml:/etc/prometheus/prometheus.yml:ro
+      - ../prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+    ports: ["9095:9090"]
+    networks: [crm]
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    command: [--config.file=/etc/alertmanager/alertmanager.yml]
+    volumes:
+      - ./alertmanager.dev.yml:/etc/alertmanager/alertmanager.yml:ro
+    ports: ["9096:9093"]
+    networks: [crm]
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin   # только локальный dev
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ../grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports: ["3001:3000"]
+    networks: [crm]
+
+networks:
+  crm:
+    external: true
+    name: interfin-ai-crm_default

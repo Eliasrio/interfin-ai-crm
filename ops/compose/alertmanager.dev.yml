@@ -1,0 +1,12 @@
+# alertmanager.dev.yml — локальный Alertmanager без внешних уведомлений
+# (dev-стенд мониторинга). Боевой конфиг с Telegram-приёмником — секрет
+# alertmanager_yml (ops/alertmanager/alertmanager.yml.example).
+route:
+  receiver: noop
+  group_by: [alertname]
+  group_wait: 5s
+  group_interval: 1m
+  repeat_interval: 1h
+
+receivers:
+  - name: noop

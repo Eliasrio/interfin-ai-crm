@@ -17,9 +17,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/interfin/interfin-ai-crm/internal/config"
+	"github.com/interfin/interfin-ai-crm/internal/metrics"
 )
 
 const (
@@ -162,6 +164,15 @@ func (c *Client) CountTokens(ctx context.Context, system string, msgs []Message)
 }
 
 func (c *Client) post(ctx context.Context, path string, body, out interface{}) error {
+	// M11 §14: claude_api_duration_seconds. status — HTTP-код Anthropic
+	// либо transport_error (таймаут/обрыв до получения статуса).
+	start := time.Now()
+	status := "transport_error"
+	defer func() {
+		metrics.ClaudeAPIDuration.WithLabelValues(path, status).
+			Observe(time.Since(start).Seconds())
+	}()
+
 	payload, err := json.Marshal(body)
 	if err != nil {
 		return fmt.Errorf("marshal request: %w", err)
@@ -180,6 +191,7 @@ func (c *Client) post(ctx context.Context, path string, body, out interface{}) e
 		return fmt.Errorf("do request: %w", err)
 	}
 	defer resp.Body.Close()
+	status = strconv.Itoa(resp.StatusCode)
 
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {

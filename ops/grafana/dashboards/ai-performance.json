@@ -1,0 +1,62 @@
+{
+  "title": "AI Performance",
+  "uid": "ai-performance",
+  "tags": ["interfin", "m11"],
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Claude API — латентность p50/p95 (§6.1: 3–15 с)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, sum by (le, endpoint) (rate(claude_api_duration_seconds_bucket[5m])))", "legendFormat": "p50 {{endpoint}}" },
+        { "expr": "histogram_quantile(0.95, sum by (le, endpoint) (rate(claude_api_duration_seconds_bucket[5m])))", "legendFormat": "p95 {{endpoint}}" }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Вызовы/с по статусам",
+      "description": "429/529 — rate limit Anthropic; transport_error — таймаут 60с или обрыв",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        { "expr": "sum by (status) (rate(claude_api_duration_seconds_count[5m]))", "legendFormat": "{{status}}" }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Доля ошибок Claude (10 мин)",
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "yellow", "value": 0.05 },
+            { "color": "red", "value": 0.2 }
+          ] }
+        },
+        "overrides": []
+      },
+      "targets": [
+        { "expr": "sum(rate(claude_api_duration_seconds_count{status!=\"200\"}[10m])) / clamp_min(sum(rate(claude_api_duration_seconds_count[10m])), 1e-9)", "legendFormat": "error ratio" }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "count_tokens: доля точных подсчётов (§4.6 — гибридная схема)",
+      "description": "Точный count_tokens зовётся только когда локальная оценка len/4 > 7500. Рост доли — диалоги у границы бюджета §7.2",
+      "gridPos": { "h": 8, "w": 18, "x": 6, "y": 8 },
+      "targets": [
+        { "expr": "sum(rate(claude_api_duration_seconds_count{endpoint=\"/v1/messages/count_tokens\"}[10m])) / clamp_min(sum(rate(claude_api_duration_seconds_count{endpoint=\"/v1/messages\"}[10m])), 1e-9)", "legendFormat": "count_tokens / messages" }
+      ]
+    }
+  ]
+}

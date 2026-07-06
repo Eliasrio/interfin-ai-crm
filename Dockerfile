@@ -15,6 +15,8 @@ COPY --from=build /out/server /app/server
 COPY --from=build /out/migrate /app/migrate
 COPY config/config.yaml /app/config/config.yaml
 COPY migrations /app/migrations
+# M11: мост «Docker secrets → env» для prod (dev без секрета app_env — no-op).
+COPY ops/docker/app-entrypoint.sh /app/entrypoint.sh
 USER app
 EXPOSE 8080
 
@@ -22,4 +24,5 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD wget -qO- http://localhost:8080/health || exit 1
 
-ENTRYPOINT ["/app/server"]
+ENTRYPOINT ["/app/entrypoint.sh"]
+CMD ["/app/server"]

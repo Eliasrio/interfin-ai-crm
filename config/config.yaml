@@ -23,7 +23,11 @@ database:
 
 redis:
   addr: ${REDIS_ADDR}          # dev/staging: одиночный Redis (§13.1)
-  sentinel_addrs: []           # prod: [sentinel1:26379, sentinel2:26379, sentinel3:26379]
+  # prod (M11 §11.1): REDIS_SENTINEL_ADDRS="sentinel-1:26379,sentinel-2:26379,
+  # sentinel-3:26379" — строка с запятыми разворачивается viper'ом в список.
+  # Заданы sentinel_addrs → Asynq/go-redis идут через failover-клиент, addr
+  # игнорируется. Не заданы → одиночный addr.
+  sentinel_addrs: ${REDIS_SENTINEL_ADDRS}
   master_name: mymaster
   password: ${REDIS_PASSWORD}
 
@@ -113,6 +117,13 @@ lgpd:
   erasure_salt: ${LGPD_SALT}
 
 monitoring:
-  prometheus_port: 9090
-  metrics_ip_allowlist: [10.0.0.0/8]        # AQ²-fix #10
+  # M11 §14: /metrics живёт на ОТДЕЛЬНОМ listener'е этого порта (не на
+  # server.port) за IP-allowlist'ом; наружу порт не публикуется, внешний
+  # доступ — только через Nginx mTLS (ops/nginx, AQ²-10).
+  prometheus_port: 9091
+  # Приватные сети (AQ²-fix #10): loopback (v4 и v6 — localhost в alpine
+  # резолвится в ::1), 10/8 (Swarm overlay из docker-stack) и 172.16/12
+  # (bridge-сети docker compose — из них ходит Prometheus). Решение по
+  # RemoteAddr, X-Forwarded-For игнорируется.
+  metrics_ip_allowlist: [127.0.0.1/32, "::1/128", 10.0.0.0/8, 172.16.0.0/12]
   alertmanager_url: ${ALERTMANAGER_URL}

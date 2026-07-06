@@ -1,0 +1,71 @@
+# docker-compose.sentinel.yml — ЛОКАЛЬНЫЙ стенд Redis Sentinel (M11 §11.1)
+# для failover-учений (scripts/failover_drill.sh) и ручной отладки.
+# Это НЕ prod: без пароля и без томов. Боевая топология — docker-compose.prod.yml.
+#
+#   docker compose -f ops/compose/docker-compose.sentinel.yml up -d
+#
+# Наружу опубликованы sentinel-порты 26379-26381 (для драйвера с хоста) и
+# 6390-6392 (redis-узлы: сам драйвер ходит на адреса, которые объявляет
+# Sentinel, — имена сервисов; для хоста они резолвятся в 127.0.0.1 через
+# /etc/hosts, см. failover_drill.sh).
+
+name: interfin-sentinel-drill
+
+services:
+  redis-m:
+    image: redis:7-alpine
+    container_name: drill-redis-m
+    # port 6390 и announce: с хоста узел доступен как 127.0.0.1:6390, а
+    # Sentinel объявляет драйверу пару (redis-m, 6390) — внутри сети
+    # контейнеров имя redis-m резолвится Docker DNS, с хоста — /etc/hosts.
+    command: >
+      redis-server --port 6390 --appendonly yes
+      --replica-announce-ip redis-m --replica-announce-port 6390
+    ports: ["6390:6390"]
+
+  redis-r1:
+    image: redis:7-alpine
+    container_name: drill-redis-r1
+    command: >
+      redis-server --port 6391 --appendonly yes
+      --replicaof redis-m 6390
+      --replica-announce-ip redis-r1 --replica-announce-port 6391
+    ports: ["6391:6391"]
+    depends_on: [redis-m]
+
+  redis-r2:
+    image: redis:7-alpine
+    container_name: drill-redis-r2
+    command: >
+      redis-server --port 6392 --appendonly yes
+      --replicaof redis-m 6390
+      --replica-announce-ip redis-r2 --replica-announce-port 6392
+    ports: ["6392:6392"]
+    depends_on: [redis-m]
+
+  sentinel-1:
+    image: redis:7-alpine
+    container_name: drill-sentinel-1
+    command: >
+      sh -c 'printf "port 26379\nsentinel resolve-hostnames yes\nsentinel announce-hostnames yes\nsentinel monitor mymaster redis-m 6390 2\nsentinel down-after-milliseconds mymaster 2000\nsentinel failover-timeout mymaster 10000\nsentinel parallel-syncs mymaster 1\n" > /tmp/sentinel.conf &&
+      exec redis-sentinel /tmp/sentinel.conf'
+    ports: ["26379:26379"]
+    depends_on: [redis-m, redis-r1, redis-r2]
+
+  sentinel-2:
+    image: redis:7-alpine
+    container_name: drill-sentinel-2
+    command: >
+      sh -c 'printf "port 26380\nsentinel resolve-hostnames yes\nsentinel announce-hostnames yes\nsentinel monitor mymaster redis-m 6390 2\nsentinel down-after-milliseconds mymaster 2000\nsentinel failover-timeout mymaster 10000\nsentinel parallel-syncs mymaster 1\n" > /tmp/sentinel.conf &&
+      exec redis-sentinel /tmp/sentinel.conf'
+    ports: ["26380:26380"]
+    depends_on: [redis-m, redis-r1, redis-r2]
+
+  sentinel-3:
+    image: redis:7-alpine
+    container_name: drill-sentinel-3
+    command: >
+      sh -c 'printf "port 26381\nsentinel resolve-hostnames yes\nsentinel announce-hostnames yes\nsentinel monitor mymaster redis-m 6390 2\nsentinel down-after-milliseconds mymaster 2000\nsentinel failover-timeout mymaster 10000\nsentinel parallel-syncs mymaster 1\n" > /tmp/sentinel.conf &&
+      exec redis-sentinel /tmp/sentinel.conf'
+    ports: ["26381:26381"]
+    depends_on: [redis-m, redis-r1, redis-r2]

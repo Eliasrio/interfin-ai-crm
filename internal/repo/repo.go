@@ -39,6 +39,15 @@ type LeadRepo interface {
 	// catch-up §10.3: только лиды с last_activity_at позже метки (быстро:
 	// idx_leads_activity). Возвращает страницу и total под пагинацию M10.
 	List(ctx context.Context, p ListLeadsParams) ([]models.Lead, int64, error)
+	// ListPendingTask — лиды с pending_task=TRUE (Redis был недоступен на
+	// enqueue, §11.2); выборка ложится на частичный индекс idx_leads_pending.
+	// Для recovery-cron M11: старые первыми (id ASC), не больше limit за тик.
+	ListPendingTask(ctx context.Context, limit int) ([]models.Lead, error)
+	// ClearPendingTask снимает pending_task, ТОЛЬКО если message_count не
+	// изменился с момента чтения лида (seenMessageCount). false — лид успел
+	// получить новое сообщение: флаг не трогаем, следующий тик recovery-cron
+	// перевыставит задачу уже с новым счётчиком (§11.2, гонка recovery/webhook).
+	ClearPendingTask(ctx context.Context, id int64, seenMessageCount int) (bool, error)
 	// TransitionStage атомарно (CAS: WHERE stage_id = from) переводит лида
 	// в стадию to, сбрасывает anti_spam_count (§3.5) и обновляет
 	// last_activity_at — точку отсчёта TTL новой стадии (CLAUDE.md §4.7).

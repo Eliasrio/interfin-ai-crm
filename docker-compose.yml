@@ -19,6 +19,31 @@ services:
       timeout: 3s
       retries: 10
 
+  # M11 (AQ²-3): pgbouncer в transaction mode — как в prod (§11.3).
+  # Через него гоняется полный load-тест SimpleProtocol:
+  #   POSTGRES_TEST_DSN=postgres://postgres:postgres@localhost:6432/interfin_test \
+  #     go test ./internal/db/ -run TestSimpleProtocolUnderLoad -v
+  pgbouncer:
+    image: edoburu/pgbouncer:v1.23.1-p2
+    environment:
+      DB_HOST: postgres
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      AUTH_TYPE: plain          # dev: plain к клиенту, scram к серверу
+      POOL_MODE: transaction    # §11.3 — режим, ломающий prepared statements (CLAUDE.md §4.2)
+      DEFAULT_POOL_SIZE: "36"   # §11.3
+      MAX_CLIENT_CONN: "200"
+    ports:
+      - "6432:5432"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   redis:
     image: redis:7-alpine
     ports:

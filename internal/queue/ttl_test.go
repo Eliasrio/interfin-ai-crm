@@ -56,6 +56,14 @@ func (f *fakeLeadRepo) List(context.Context, repo.ListLeadsParams) ([]models.Lea
 	panic("TTL-менеджер не листает лидов (метод M8)")
 }
 
+func (f *fakeLeadRepo) ListPendingTask(context.Context, int) ([]models.Lead, error) {
+	panic("TTL-менеджер не трогает pending_task (метод M11)")
+}
+
+func (f *fakeLeadRepo) ClearPendingTask(context.Context, int64, int) (bool, error) {
+	panic("TTL-менеджер не трогает pending_task (метод M11)")
+}
+
 func (f *fakeLeadRepo) Save(_ context.Context, lead *models.Lead) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

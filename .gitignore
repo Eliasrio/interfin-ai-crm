@@ -16,3 +16,4 @@ web/dist/
 .idea/
 .vscode/
 .DS_Store
+.drill/

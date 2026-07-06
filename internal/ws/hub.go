@@ -25,6 +25,7 @@ package ws
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"sync"
 	"time"
@@ -32,6 +33,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/interfin/interfin-ai-crm/internal/events"
+	"github.com/interfin/interfin-ai-crm/internal/metrics"
 )
 
 // Timings — интервалы heartbeat/записи. Вынесены в структуру ради тестов
@@ -120,7 +122,24 @@ func (h *Hub) pump(ctx context.Context, pubsub *redis.PubSub) {
 			}
 			return
 		}
+		observeEventLatency([]byte(msg.Payload))
 		h.broadcast([]byte(msg.Payload))
+	}
+}
+
+// observeEventLatency — ws_event_latency_seconds (M11 §14): от events.Event.TS
+// (момент публикации, ставится в том же процессе — часы одни) до broadcast.
+// Достаём из payload только ts: полная схема события Hub'у не нужна (§10.1 —
+// он раздаёт события как есть).
+func observeEventLatency(payload []byte) {
+	var ev struct {
+		TS time.Time `json:"ts"`
+	}
+	if err := json.Unmarshal(payload, &ev); err != nil || ev.TS.IsZero() {
+		return // не событие crm:events или без метки — метрике нечего мерить
+	}
+	if lat := time.Since(ev.TS); lat >= 0 {
+		metrics.WSEventLatency.Observe(lat.Seconds())
 	}
 }
 

@@ -1,0 +1,56 @@
+{
+  "title": "CRM Overview",
+  "uid": "crm-overview",
+  "tags": ["interfin", "m11"],
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Вебхук Telegram — латентность (p50/p95/p99)",
+      "description": "SRS §4.4: ответ Telegram обязан быть мгновенным (алерт WebhookHighLatency при p95 > 1с)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, sum by (le) (rate(gin_request_duration_seconds_bucket{path=\"/webhook/telegram\"}[5m])))", "legendFormat": "p50" },
+        { "expr": "histogram_quantile(0.95, sum by (le) (rate(gin_request_duration_seconds_bucket{path=\"/webhook/telegram\"}[5m])))", "legendFormat": "p95" },
+        { "expr": "histogram_quantile(0.99, sum by (le) (rate(gin_request_duration_seconds_bucket{path=\"/webhook/telegram\"}[5m])))", "legendFormat": "p99" }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "HTTP RPS по роутам",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [
+        { "expr": "sum by (path) (rate(gin_request_duration_seconds_count[5m]))", "legendFormat": "{{path}}" }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "HTTP 5xx / 4xx",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [
+        { "expr": "sum(rate(gin_request_duration_seconds_count{status=~\"5..\"}[5m]))", "legendFormat": "5xx" },
+        { "expr": "sum(rate(gin_request_duration_seconds_count{status=~\"4..\"}[5m]))", "legendFormat": "4xx" }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "WS: событие → broadcast (p95, IQ-10 < 500 мс)",
+      "description": "ws_event_latency_seconds: путь crm:events из Redis pub/sub до раздачи WS-клиентам",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        { "expr": "histogram_quantile(0.95, sum by (le) (rate(ws_event_latency_seconds_bucket[5m])))", "legendFormat": "p95" }
+      ]
+    }
+  ]
+}

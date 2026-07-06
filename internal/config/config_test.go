@@ -253,3 +253,59 @@ func TestLoad_RejectsPreparedStatements(t *testing.T) {
 		t.Fatal("Load должен отклонять prepare_stmt: true (AQ²-fix #3)")
 	}
 }
+
+// M11 §11.1: REDIS_SENTINEL_ADDRS — строка с запятыми, viper разворачивает
+// её в []string (StringToSliceHookFunc). Задана → failover-режим (addr может
+// быть пустым); не задана → одиночный addr обязателен.
+func TestLoad_SentinelAddrsFromEnv(t *testing.T) {
+	t.Setenv("POSTGRES_DSN", "postgres://u:p@localhost:5432/db")
+	t.Setenv("REDIS_SENTINEL_ADDRS", "sentinel-1:26379,sentinel-2:26379,sentinel-3:26379")
+
+	yaml := `
+server:
+  port: 8080
+database:
+  dsn: ${POSTGRES_DSN}
+  prepare_stmt: false
+  query_exec_mode: simple
+redis:
+  addr: ""
+  sentinel_addrs: ${REDIS_SENTINEL_ADDRS}
+  master_name: mymaster
+`
+	cfg, err := Load(writeTempConfig(t, yaml))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := []string{"sentinel-1:26379", "sentinel-2:26379", "sentinel-3:26379"}
+	if len(cfg.Redis.SentinelAddrs) != len(want) {
+		t.Fatalf("sentinel_addrs = %q, ожидали %q", cfg.Redis.SentinelAddrs, want)
+	}
+	for i := range want {
+		if cfg.Redis.SentinelAddrs[i] != want[i] {
+			t.Errorf("sentinel_addrs[%d] = %q, ожидали %q", i, cfg.Redis.SentinelAddrs[i], want[i])
+		}
+	}
+	if cfg.Redis.MasterName != "mymaster" {
+		t.Errorf("master_name = %q", cfg.Redis.MasterName)
+	}
+}
+
+func TestLoad_NoRedisAtAllFails(t *testing.T) {
+	t.Setenv("POSTGRES_DSN", "postgres://u:p@localhost:5432/db")
+
+	yaml := `
+server:
+  port: 8080
+database:
+  dsn: ${POSTGRES_DSN}
+  prepare_stmt: false
+  query_exec_mode: simple
+redis:
+  addr: ""
+  sentinel_addrs: []
+`
+	if _, err := Load(writeTempConfig(t, yaml)); err == nil {
+		t.Fatal("конфиг без addr и без sentinel_addrs обязан быть ошибкой")
+	}
+}

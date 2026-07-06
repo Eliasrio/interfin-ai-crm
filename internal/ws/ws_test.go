@@ -648,3 +648,13 @@ waitClose:
 	rd2 := readLoop(conn2)
 	warmup(t, pub, rd2)
 }
+
+// Заглушки M11 (recovery-cron pending_task работает с боевым leadRepo,
+// в этих тестах не участвует).
+func (f *wsLeads) ListPendingTask(context.Context, int) ([]models.Lead, error) {
+	panic("pending_task здесь не используется (M11)")
+}
+
+func (f *wsLeads) ClearPendingTask(context.Context, int64, int) (bool, error) {
+	panic("pending_task здесь не используется (M11)")
+}

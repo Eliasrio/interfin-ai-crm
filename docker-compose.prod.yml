@@ -1,0 +1,403 @@
+# docker-compose.prod.yml — боевой Swarm-stack Interfin AI-CRM (M11, SRS §13.2).
+#
+# Деплой (подробно — docs/ops/provisioning.md):
+#   docker compose -f docker-compose.prod.yml build   # собрать образы на сервере
+#   docker stack deploy -c docker-compose.prod.yml crm
+#
+# Секреты — ТОЛЬКО внешние Docker secrets (CLAUDE.md §4.9), создаются один раз
+# на сервере (`docker secret create <имя> -`), в git не живут:
+#   app_env                — KEY=VALUE все секретные env приложения (POSTGRES_DSN,
+#                            REDIS_PASSWORD, TELEGRAM_*, ANTHROPIC_API_KEY,
+#                            VOYAGE_API_KEY, CRYPTOBOT_*, LGPD_SALT, AWS_*)
+#   jwt_private, jwt_public— RSA-пара RS256 (M7)
+#   postgres_password      — суперпользователь postgres
+#   replication_password   — роль replicator (§11.3)
+#   walg_env               — KEY=VALUE wal-g: WALG_S3_PREFIX, AWS_* (§11.3, PITR)
+#   pgbouncer_userlist     — auth-файл pgbouncer (SCRAM)
+#   redis_password         — общий пароль master/replica/sentinel (§11.1)
+#   alertmanager_yml       — конфиг Alertmanager ЦЕЛИКОМ (содержит токен бота)
+#   grafana_admin_password — админ Grafana
+#
+# Периметр (§13, чек-лист безопасности): наружу опубликованы ТОЛЬКО 80/443
+# nginx. БД, Redis, Sentinel, /metrics, Prometheus, Grafana — только во
+# внутренних overlay-сетях.
+
+x-app-service: &app-service
+  image: interfin-crm/app:latest
+  build: .
+  environment:
+    CONFIG_PATH: /app/config/config.yaml
+    HTTP_PORT: "8080"
+    # Секретные значения приезжают через /run/secrets/app_env (entrypoint).
+    # Здесь — только НЕсекретная топология.
+    REDIS_SENTINEL_ADDRS: sentinel-1:26379,sentinel-2:26379,sentinel-3:26379
+    CRYPTOBOT_USE_TESTNET: "false"
+  secrets:
+    - app_env
+    - jwt_private
+    - jwt_public
+  networks:
+    - edge
+    - backend
+  deploy:
+    replicas: 2
+    update_config:
+      parallelism: 1        # rolling update: всегда жив хотя бы один инстанс
+      order: start-first
+    restart_policy:
+      condition: on-failure
+
+services:
+  # ---------- приложение (Go: HTTP + Asynq-воркер в одном процессе) ----------
+  app: *app-service
+
+  # ---------- периметр ----------
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    configs:
+      - source: nginx_conf
+        target: /etc/nginx/nginx.conf
+      - source: nginx_crm_conf
+        target: /etc/nginx/conf.d/crm.conf
+    volumes:
+      # Let's Encrypt живёт на хосте (certbot renew), см. provisioning.md.
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      # CA клиентских сертификатов mTLS для /metrics (AQ²-10).
+      - /etc/interfin/metrics-ca:/etc/nginx/metrics-ca:ro
+    networks:
+      - edge
+      - monitoring
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/nginx-health"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+    deploy:
+      restart_policy:
+        condition: on-failure
+
+  # ---------- PostgreSQL (§11.3): primary + streaming replica + WAL→S3 ----------
+  postgres-primary:
+    image: interfin-crm/postgres:16
+    build: ./ops/postgres
+    command: postgres -c config_file=/etc/postgresql/postgresql-primary.conf
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      POSTGRES_DB: interfin
+    configs:
+      - source: pg_primary_conf
+        target: /etc/postgresql/postgresql-primary.conf
+    secrets:
+      - postgres_password
+      - replication_password
+      - walg_env
+    volumes:
+      - pgdata-primary:/var/lib/postgresql/data
+      - ./ops/postgres/initdb:/docker-entrypoint-initdb.d:ro
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d interfin"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    deploy:
+      restart_policy:
+        condition: on-failure
+
+  postgres-replica:
+    image: interfin-crm/postgres:16
+    entrypoint: ["/usr/local/bin/replica-entrypoint.sh"]
+    environment:
+      PRIMARY_HOST: postgres-primary
+      PGDATA: /var/lib/postgresql/data
+    secrets:
+      - replication_password
+      - walg_env
+    volumes:
+      - pgdata-replica:/var/lib/postgresql/data
+      - ./ops/postgres/replica-entrypoint.sh:/usr/local/bin/replica-entrypoint.sh:ro
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    deploy:
+      restart_policy:
+        condition: on-failure
+
+  pgbouncer:
+    image: edoburu/pgbouncer:v1.23.1-p2
+    configs:
+      - source: pgbouncer_ini
+        target: /etc/pgbouncer/pgbouncer.ini
+    secrets:
+      - source: pgbouncer_userlist
+        target: /etc/pgbouncer/userlist.txt
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "psql -h 127.0.0.1 -p 6432 -U pgbouncer_admin pgbouncer -c 'SHOW VERSION;' || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    deploy:
+      restart_policy:
+        condition: on-failure
+
+  # ---------- Redis HA (§11.1): 1 master + 2 replica + 3 Sentinel ----------
+  redis-master:
+    image: redis:7-alpine
+    command: >
+      sh -c 'exec redis-server /etc/redis/redis.conf
+      --requirepass "$$(cat /run/secrets/redis_password)"
+      --masterauth "$$(cat /run/secrets/redis_password)"'
+    configs:
+      - source: redis_master_conf
+        target: /etc/redis/redis.conf
+    secrets: [redis_password]
+    volumes:
+      - redis-master-data:/data
+    networks: [backend]
+    healthcheck: &redis-health
+      test: ["CMD-SHELL", "redis-cli -a \"$$(cat /run/secrets/redis_password)\" ping | grep PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    deploy:
+      restart_policy:
+        condition: on-failure
+
+  redis-replica-1:
+    image: redis:7-alpine
+    command: >
+      sh -c 'exec redis-server /etc/redis/redis.conf
+      --requirepass "$$(cat /run/secrets/redis_password)"
+      --masterauth "$$(cat /run/secrets/redis_password)"
+      --replica-announce-ip redis-replica-1'
+    configs:
+      - source: redis_replica_conf
+        target: /etc/redis/redis.conf
+    secrets: [redis_password]
+    volumes:
+      - redis-replica1-data:/data
+    networks: [backend]
+    healthcheck: *redis-health
+    deploy:
+      restart_policy:
+        condition: on-failure
+
+  redis-replica-2:
+    image: redis:7-alpine
+    command: >
+      sh -c 'exec redis-server /etc/redis/redis.conf
+      --requirepass "$$(cat /run/secrets/redis_password)"
+      --masterauth "$$(cat /run/secrets/redis_password)"
+      --replica-announce-ip redis-replica-2'
+    configs:
+      - source: redis_replica_conf
+        target: /etc/redis/redis.conf
+    secrets: [redis_password]
+    volumes:
+      - redis-replica2-data:/data
+    networks: [backend]
+    healthcheck: *redis-health
+    deploy:
+      restart_policy:
+        condition: on-failure
+
+  # Sentinel переписывает конфиг на лету → шаблон копируется в writable /data.
+  sentinel-1: &sentinel-service
+    image: redis:7-alpine
+    command: >
+      sh -c 'cp /etc/redis/sentinel.conf /data/sentinel.conf &&
+      echo "sentinel auth-pass mymaster $$(cat /run/secrets/redis_password)" >> /data/sentinel.conf &&
+      exec redis-sentinel /data/sentinel.conf'
+    configs:
+      - source: sentinel_conf
+        target: /etc/redis/sentinel.conf
+    secrets: [redis_password]
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -p 26379 ping | grep PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    deploy:
+      restart_policy:
+        condition: on-failure
+
+  sentinel-2: *sentinel-service
+  sentinel-3: *sentinel-service
+
+  # ---------- Monitoring (§14) ----------
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=30d
+    configs:
+      - source: prometheus_yml
+        target: /etc/prometheus/prometheus.yml
+      - source: prometheus_alerts
+        target: /etc/prometheus/alerts.yml
+    volumes:
+      - prometheus-data:/prometheus
+    networks:
+      - monitoring
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9090/-/healthy || exit 1"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+    deploy:
+      restart_policy:
+        condition: on-failure
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    command:
+      - --config.file=/run/secrets/alertmanager_yml
+    secrets:
+      - alertmanager_yml   # содержит токен Telegram-бота → секрет, не config
+    networks: [monitoring]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9093/-/healthy || exit 1"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+    deploy:
+      restart_policy:
+        condition: on-failure
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_admin_password
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      # Grafana доступна ТОЛЬКО через nginx (/grafana/, за TLS + auth).
+      GF_SERVER_ROOT_URL: "%(protocol)s://%(domain)s/grafana/"
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+    secrets: [grafana_admin_password]
+    configs:
+      - source: grafana_datasource
+        target: /etc/grafana/provisioning/datasources/prometheus.yml
+      - source: grafana_dash_provider
+        target: /etc/grafana/provisioning/dashboards/dashboards.yml
+      - source: dash_crm_overview
+        target: /var/lib/grafana/dashboards/crm-overview.json
+      - source: dash_worker_health
+        target: /var/lib/grafana/dashboards/worker-health.json
+      - source: dash_ai_performance
+        target: /var/lib/grafana/dashboards/ai-performance.json
+      - source: dash_infrastructure
+        target: /var/lib/grafana/dashboards/infrastructure.json
+    volumes:
+      - grafana-data:/var/lib/grafana
+    networks: [monitoring]
+    deploy:
+      restart_policy:
+        condition: on-failure
+
+  # Один экспортёр на все узлы Redis/Sentinel (multi-target /scrape).
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.61.0
+    environment:
+      REDIS_PASSWORD_FILE: /run/secrets/redis_password
+    secrets: [redis_password]
+    networks:
+      - backend
+      - monitoring
+    deploy:
+      restart_policy:
+        condition: on-failure
+
+configs:
+  nginx_conf:
+    file: ./ops/nginx/nginx.conf
+  nginx_crm_conf:
+    file: ./ops/nginx/conf.d/crm.conf
+  pg_primary_conf:
+    file: ./ops/postgres/postgresql-primary.conf
+  pgbouncer_ini:
+    file: ./ops/pgbouncer/pgbouncer.ini
+  redis_master_conf:
+    file: ./ops/redis/redis-master.conf
+  redis_replica_conf:
+    file: ./ops/redis/redis-replica.conf
+  sentinel_conf:
+    file: ./ops/redis/sentinel.conf
+  prometheus_yml:
+    file: ./ops/prometheus/prometheus.yml
+  prometheus_alerts:
+    file: ./ops/prometheus/alerts.yml
+  grafana_datasource:
+    file: ./ops/grafana/provisioning/datasources/prometheus.yml
+  grafana_dash_provider:
+    file: ./ops/grafana/provisioning/dashboards/dashboards.yml
+  dash_crm_overview:
+    file: ./ops/grafana/dashboards/crm-overview.json
+  dash_worker_health:
+    file: ./ops/grafana/dashboards/worker-health.json
+  dash_ai_performance:
+    file: ./ops/grafana/dashboards/ai-performance.json
+  dash_infrastructure:
+    file: ./ops/grafana/dashboards/infrastructure.json
+
+secrets:
+  app_env:
+    external: true
+  jwt_private:
+    external: true
+  jwt_public:
+    external: true
+  postgres_password:
+    external: true
+  replication_password:
+    external: true
+  walg_env:
+    external: true
+  pgbouncer_userlist:
+    external: true
+  redis_password:
+    external: true
+  alertmanager_yml:
+    external: true
+  grafana_admin_password:
+    external: true
+
+networks:
+  # Подсети внутри 10.0.0.0/8 — согласовано с metrics_ip_allowlist (config.yaml).
+  # Сети НЕ internal: postgres ходит в S3 (wal-g), alertmanager — в Telegram
+  # API. Недоступность БД/Redis/метрик СНАРУЖИ обеспечивают непубликация
+  # портов (published только 80/443 nginx) + firewall хоста (чек-лист
+  # безопасности, docs/ops/provisioning.md).
+  edge:
+    driver: overlay
+    ipam:
+      config: [{subnet: 10.61.1.0/24}]
+  backend:
+    driver: overlay
+    ipam:
+      config: [{subnet: 10.61.2.0/24}]
+  monitoring:
+    driver: overlay
+    ipam:
+      config: [{subnet: 10.61.3.0/24}]
+
+volumes:
+  pgdata-primary:
+  pgdata-replica:
+  redis-master-data:
+  redis-replica1-data:
+  redis-replica2-data:
+  prometheus-data:
+  grafana-data:

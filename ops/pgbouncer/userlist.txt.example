@@ -1,0 +1,9 @@
+; userlist.txt — auth-файл pgbouncer. В git живёт ТОЛЬКО этот example
+; (CLAUDE.md §4.9); боевой файл уходит в Docker secret:
+;
+;   docker secret create pgbouncer_userlist userlist.txt
+;
+; Формат: "user" "SCRAM-верификатор" (взять из pg_authid после создания роли):
+;   SELECT rolname, rolpassword FROM pg_authid WHERE rolname IN ('crm','pgbouncer_admin');
+"crm" "SCRAM-SHA-256$4096:<salt>$<storedkey>:<serverkey>"
+"pgbouncer_admin" "SCRAM-SHA-256$4096:<salt>$<storedkey>:<serverkey>"

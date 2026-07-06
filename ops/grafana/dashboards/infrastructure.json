@@ -1,0 +1,68 @@
+{
+  "title": "Infrastructure",
+  "uid": "infrastructure",
+  "tags": ["interfin", "m11"],
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Sentinel живы (§11.1: кворум 2 из 3)",
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "red", "value": null },
+            { "color": "yellow", "value": 2 },
+            { "color": "green", "value": 3 }
+          ] }
+        },
+        "overrides": []
+      },
+      "targets": [
+        { "expr": "count(redis_up{job=\"redis-sentinel\"} == 1) or vector(0)", "legendFormat": "sentinels up" }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Узлы Redis (redis_up)",
+      "gridPos": { "h": 8, "w": 9, "x": 6, "y": 0 },
+      "targets": [
+        { "expr": "redis_up{job=\"redis-nodes\"}", "legendFormat": "{{instance}}" }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Redis: подключённые реплики master'а",
+      "description": "Норма 2. Падение — реплика отстала/умерла; failover Sentinel виден как смена роли",
+      "gridPos": { "h": 8, "w": 9, "x": 15, "y": 0 },
+      "targets": [
+        { "expr": "redis_connected_slaves{job=\"redis-nodes\"}", "legendFormat": "{{instance}}" }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Приложение: goroutines",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        { "expr": "go_goroutines{job=\"crm-app\"}", "legendFormat": "{{instance}}" }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Приложение: RSS-память",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "targets": [
+        { "expr": "process_resident_memory_bytes{job=\"crm-app\"}", "legendFormat": "{{instance}}" }
+      ]
+    }
+  ]
+}

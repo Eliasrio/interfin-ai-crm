@@ -423,3 +423,13 @@ func TestHandle_ErrorsAreWrapped(t *testing.T) {
 		t.Errorf("ошибка без контекста шага: %v", err)
 	}
 }
+
+// Заглушки M11 (recovery-cron pending_task работает с боевым leadRepo,
+// в этих тестах не участвует).
+func (f *fakeLeads) ListPendingTask(context.Context, int) ([]models.Lead, error) {
+	panic("pending_task здесь не используется (M11)")
+}
+
+func (f *fakeLeads) ClearPendingTask(context.Context, int64, int) (bool, error) {
+	panic("pending_task здесь не используется (M11)")
+}

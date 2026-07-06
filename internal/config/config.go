@@ -7,6 +7,7 @@ package config
 import (
 	"bytes"
 	"fmt"
+	"net"
 	"os"
 	"regexp"
 	"sort"
@@ -398,6 +399,29 @@ func (c *Config) validate() error {
 		if pct := c.Kanban.UnderpaidTolerancePct; pct <= 0 || pct >= 100 {
 			problems = append(problems, fmt.Sprintf(
 				"kanban.underpaid_tolerance_pct вне (0,100): %v (§3.3)", pct))
+		}
+	}
+
+	// M11 §14: monitoring-секция проверяется, когда задан prometheus_port
+	// (юнит-тестовые yaml без неё валидны — /metrics там не поднимается).
+	if m := c.Monitoring; m.PrometheusPort != 0 {
+		switch {
+		case m.PrometheusPort < 0 || m.PrometheusPort > 65535:
+			problems = append(problems, fmt.Sprintf(
+				"monitoring.prometheus_port вне диапазона: %d", m.PrometheusPort))
+		case m.PrometheusPort == c.Server.Port:
+			problems = append(problems,
+				"monitoring.prometheus_port совпадает с server.port — /metrics обязан жить на отдельном listener'е (AQ²-10)")
+		case len(m.MetricsIPAllowlist) == 0:
+			problems = append(problems,
+				"monitoring.metrics_ip_allowlist пуст — /metrics был бы закрыт для всех (AQ²-10)")
+		default:
+			for _, cidr := range m.MetricsIPAllowlist {
+				if _, _, err := net.ParseCIDR(cidr); err != nil && net.ParseIP(cidr) == nil {
+					problems = append(problems, fmt.Sprintf(
+						"monitoring.metrics_ip_allowlist: %q не CIDR и не IP", cidr))
+				}
+			}
 		}
 	}
 

@@ -1,0 +1,52 @@
+# prometheus.yml — сбор метрик SLO (M11, SRS §14).
+# Скрейпы идут по внутренним сетям Swarm; снаружи Prometheus недоступен.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: [alertmanager:9093]
+
+scrape_configs:
+  # Приложение: отдельный listener метрик (monitoring.prometheus_port).
+  # dns_sd: у сервиса app 2 реплики — tasks.<service> отдаёт IP каждой.
+  - job_name: crm-app
+    dns_sd_configs:
+      - names: [tasks.app]
+        type: A
+        port: 9091
+
+  # Sentinel и узлы Redis — через redis_exporter (multi-target /scrape).
+  - job_name: redis-sentinel
+    metrics_path: /scrape
+    static_configs:
+      - targets:
+          - redis://sentinel-1:26379
+          - redis://sentinel-2:26379
+          - redis://sentinel-3:26379
+    relabel_configs: &redis_exporter_relabel
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: redis-exporter:9121
+
+  - job_name: redis-nodes
+    metrics_path: /scrape
+    static_configs:
+      - targets:
+          - redis://redis-master:6379
+          - redis://redis-replica-1:6379
+          - redis://redis-replica-2:6379
+    relabel_configs: *redis_exporter_relabel
+
+  - job_name: prometheus
+    static_configs:
+      - targets: [localhost:9090]

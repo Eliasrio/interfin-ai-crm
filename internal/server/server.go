@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/interfin/interfin-ai-crm/internal/metrics"
 )
 
 // Pinger — минимальный контракт зависимости для readiness-проверки.
@@ -31,6 +33,9 @@ type Deps struct {
 func New(deps Deps, log *slog.Logger) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
+	// M11 §14: gin_request_duration_seconds на все роуты (включая вебхук —
+	// его латентность питает алерт WebhookHighLatency).
+	r.Use(metrics.Gin())
 
 	// Liveness: процесс жив и умеет отвечать. Ничего внешнего не проверяем.
 	r.GET("/health", func(c *gin.Context) {

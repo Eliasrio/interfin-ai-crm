@@ -16,6 +16,7 @@ import (
 	"github.com/hibiken/asynq"
 
 	"github.com/interfin/interfin-ai-crm/internal/config"
+	"github.com/interfin/interfin-ai-crm/internal/metrics"
 	"github.com/interfin/interfin-ai-crm/internal/queue"
 )
 
@@ -77,6 +78,8 @@ func New(
 	}
 
 	mux := asynq.NewServeMux()
+	// M11 §14: asynq_task_duration_seconds на все типы задач.
+	mux.Use(metrics.Asynq())
 	mux.HandleFunc(queue.TypeProcessInbound, proc.HandleProcessInbound)
 	// M4 §7.3: фоновая генерация сводки диалога (гонку гасит Redis-замок).
 	mux.HandleFunc(queue.TypeSummaryGenerate, summarizer.HandleSummaryGenerate)
@@ -90,16 +93,10 @@ func New(
 	}
 }
 
-// redisConnOpt — та же логика выбора single/Sentinel, что в queue.NewClient.
+// redisConnOpt — та же логика выбора single/Sentinel, что в queue.NewClient
+// (с M11 — общая экспортированная точка queue.ConnOpt).
 func redisConnOpt(cfg config.RedisConfig) asynq.RedisConnOpt {
-	if len(cfg.SentinelAddrs) > 0 {
-		return asynq.RedisFailoverClientOpt{
-			MasterName:    cfg.MasterName,
-			SentinelAddrs: cfg.SentinelAddrs,
-			Password:      cfg.Password,
-		}
-	}
-	return asynq.RedisClientOpt{Addr: cfg.Addr, Password: cfg.Password}
+	return queue.ConnOpt(cfg)
 }
 
 // RegisterKanban подключает обработчики M5: ttl:expire (§3.4, тип задачи —

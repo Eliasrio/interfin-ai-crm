@@ -386,3 +386,13 @@ func TestWebhook_RespondsUnder300ms(t *testing.T) {
 		t.Errorf("webhook ответил за %v — дольше лимита 300 мс (IQ-1)", elapsed)
 	}
 }
+
+// Заглушки M11 (recovery-cron pending_task работает с боевым leadRepo,
+// в этих тестах не участвует).
+func (f *fakeLeads) ListPendingTask(context.Context, int) ([]models.Lead, error) {
+	panic("pending_task здесь не используется (M11)")
+}
+
+func (f *fakeLeads) ClearPendingTask(context.Context, int64, int) (bool, error) {
+	panic("pending_task здесь не используется (M11)")
+}

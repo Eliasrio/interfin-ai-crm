@@ -1,0 +1,82 @@
+# alerts.yml — правила Alertmanager (M11 §14, task-файл: три обязательных
+# алерта + пороги SLO из SRS).
+
+groups:
+  - name: crm-slo
+    rules:
+      # §4.4 / §6.1: вебхук обязан отвечать мгновенно (Telegram ждёт 5 с).
+      # p95 > 1 с на 5-минутном окне — деградация ingestion-пути.
+      - alert: WebhookHighLatency
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le) (rate(gin_request_duration_seconds_bucket{path="/webhook/telegram"}[5m]))
+          ) > 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "p95 латентности вебхука Telegram > 1с"
+          description: >-
+            POST /webhook/telegram p95 = {{ $value | printf "%.2f" }}с за 5 мин.
+            Telegram ретраит апдейты после 5с — риск дублей и потери диалогов.
+            Смотреть: нагрузка Postgres (сохранение inbound), Redis (enqueue).
+
+      # §6.3: рост dead letter = задачи, исчерпавшие 3 ретрая. Каждая —
+      # безответный лид. asynq_queue_size{state="dead"} — gauge, поэтому
+      # «растёт» = положительная дельта за 15 мин при ненулевом размере.
+      - alert: DeadLetterQueueGrowing
+        expr: |
+          asynq_queue_size{state="dead"} > 0
+          and delta(asynq_queue_size{state="dead"}[15m]) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Dead letter очереди {{ $labels.queue }} растёт"
+          description: >-
+            В архиве asynq {{ $value }} задач и число растёт. Ретраи (3×,
+            backoff 2/8/32с) исчерпаны — лиды не получают ответов. Смотреть
+            логи воркера (task_type, error) и алерты менеджеру в Telegram.
+
+      # §11.1: живость кластера Sentinel. redis_up снимается redis_exporter'ом
+      # с каждого из трёх узлов Sentinel.
+      - alert: RedisSentinelDown
+        expr: |
+          (count(redis_up{job="redis-sentinel"} == 1) or vector(0)) < 3
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Живых Sentinel меньше трёх"
+          description: >-
+            {{ $value }} из 3 узлов Sentinel отвечают. При двух — кворум ещё
+            есть, но следующий отказ отключит автоматический failover Redis.
+
+      # Кворум потерян: failover невозможен вовсе.
+      - alert: RedisSentinelQuorumLost
+        expr: |
+          (count(redis_up{job="redis-sentinel"} == 1) or vector(0)) < 2
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Кворум Sentinel потерян — автофейловер Redis выключен"
+          description: >-
+            Меньше двух живых Sentinel: при падении master очередь и pub/sub
+            встанут до ручного вмешательства (§11.1, кворум 2/3).
+
+      # §11.2: приложение копит необработанные сообщения (Redis недоступен).
+      - alert: PendingTasksAccumulating
+        expr: |
+          sum(asynq_queue_size{state="pending"}) == 0
+          and sum(rate(gin_request_duration_seconds_count{path="/webhook/telegram"}[5m])) > 0
+          and sum(rate(asynq_task_duration_seconds_count[10m])) == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Вебхук принимает, воркер молчит"
+          description: >-
+            10 минут входящие есть, а задачи не обрабатываются — вероятен
+            режим graceful degradation §11.2 (leads.pending_task). Проверить
+            Redis/Sentinel и лог recovery-cron.

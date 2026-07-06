@@ -1,0 +1,37 @@
+# alertmanager.yml.example — маршрутизация алертов (M11 §14).
+#
+# Боевой файл содержит токен Telegram-бота, поэтому в git живёт ТОЛЬКО этот
+# example (CLAUDE.md §4.9). Заполненный файл уходит в Docker secret:
+#   docker secret create alertmanager_yml alertmanager.yml
+#
+# Канал уведомлений — Telegram-чат менеджеров (тот же, что для алертов
+# dead letter из воркера, TELEGRAM_MANAGER_CHAT_ID).
+
+route:
+  receiver: telegram-managers
+  group_by: [alertname]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    - matchers: [severity="critical"]
+      receiver: telegram-managers
+      repeat_interval: 1h
+
+receivers:
+  - name: telegram-managers
+    telegram_configs:
+      - bot_token: "<TELEGRAM_BOT_TOKEN>"       # можно завести отдельного алерт-бота
+        chat_id: -1001234567890                  # TELEGRAM_MANAGER_CHAT_ID
+        parse_mode: HTML
+        message: |-
+          {{ range .Alerts }}
+          <b>{{ .Labels.alertname }}</b> [{{ .Labels.severity }}]
+          {{ .Annotations.summary }}
+          {{ .Annotations.description }}
+          {{ end }}
+
+inhibit_rules:
+  # Кворум потерян → предупреждение «меньше трёх» избыточно.
+  - source_matchers: [alertname="RedisSentinelQuorumLost"]
+    target_matchers: [alertname="RedisSentinelDown"]

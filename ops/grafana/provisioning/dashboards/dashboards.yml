@@ -1,0 +1,8 @@
+# provisioning: дашборды M11 §14 из /var/lib/grafana/dashboards (configs stack'а).
+apiVersion: 1
+providers:
+  - name: interfin-crm
+    folder: Interfin CRM
+    type: file
+    options:
+      path: /var/lib/grafana/dashboards
