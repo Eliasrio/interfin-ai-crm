@@ -73,6 +73,8 @@ services:
       # M7-1) — в env только ПУТИ. Сгенерировать: ./scripts/gen_jwt_keys.sh
       JWT_PRIVATE_KEY_PATH: /run/secrets/jwt_private
       JWT_PUBLIC_KEY_PATH: /run/secrets/jwt_public
+      # M8: соль LGPD erasure (§9.3, обязательная) — из .env
+      LGPD_SALT: ${LGPD_SALT:-}
     secrets:
       - jwt_private
       - jwt_public

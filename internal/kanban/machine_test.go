@@ -63,6 +63,10 @@ func (f *fakeLeads) GetByTelegramUserID(context.Context, int64) (*models.Lead, e
 	return nil, repo.ErrNotFound
 }
 
+func (f *fakeLeads) List(context.Context, repo.ListLeadsParams) ([]models.Lead, int64, error) {
+	panic("state machine не листает лидов (метод M8)")
+}
+
 func (f *fakeLeads) Save(_ context.Context, lead *models.Lead) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

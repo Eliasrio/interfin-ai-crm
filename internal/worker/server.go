@@ -111,6 +111,12 @@ func (s *Server) RegisterKanban(h *KanbanHandlers) {
 	s.mux.HandleFunc(queue.TypeAntiSpamEscalate, h.HandleAntiSpamEscalate)
 }
 
+// RegisterLGPD подключает обработчик lgpd:retention (§9.1, M8).
+// Зовётся до Start.
+func (s *Server) RegisterLGPD(h *LGPDHandlers) {
+	s.mux.HandleFunc(queue.TypeLGPDRetention, h.HandleLGPDRetention)
+}
+
 // Start запускает воркер (неблокирующе — asynq.Server.Start).
 func (s *Server) Start() error {
 	if err := s.srv.Start(s.mux); err != nil {

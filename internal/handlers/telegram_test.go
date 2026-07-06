@@ -98,6 +98,10 @@ func (f *fakeLeads) TransitionStage(_ context.Context, _ int64, _, _ int16) (boo
 	panic("webhook не двигает стадии — это делает state machine в воркере (M5)")
 }
 
+func (f *fakeLeads) List(context.Context, repo.ListLeadsParams) ([]models.Lead, int64, error) {
+	panic("webhook не листает лидов (метод M8; фейк для /api — в api_contract_test.go)")
+}
+
 type fakeMsgs struct {
 	inbound    []*models.Message
 	inboundErr error

@@ -92,6 +92,7 @@ func run(log *slog.Logger) error {
 	leads, msgs, payments := repo.New(gormDB)
 	knowledge, summaries, ragAudit := repo.NewRAG(gormDB)
 	managers, refreshTokens := repo.NewAuth(gormDB)
+	lgpdRepo := repo.NewLGPD(gormDB)
 
 	// --- Redis: одиночный (dev) или Sentinel (prod), по конфигу ---
 	var rdb redis.UniversalClient
@@ -187,6 +188,8 @@ func run(log *slog.Logger) error {
 		log,
 	)
 	wrk.RegisterKanban(worker.NewKanbanHandlers(machine, log))
+	// M8 §9.1: retention-cron — обработчик и суточный планировщик.
+	wrk.RegisterLGPD(worker.NewLGPDHandlers(lgpdRepo, cfg.LGPD.RetentionDays, log))
 	if err := wrk.Start(); err != nil {
 		return err
 	}
@@ -194,6 +197,17 @@ func run(log *slog.Logger) error {
 	// активных задач, которым эти соединения ещё нужны.
 	defer wrk.Shutdown()
 	log.Info("asynq worker started", "task", queue.TypeProcessInbound)
+
+	retention, err := queue.NewRetentionScheduler(cfg.Redis, log)
+	if err != nil {
+		return err
+	}
+	if err := retention.Start(); err != nil {
+		return err
+	}
+	defer retention.Shutdown()
+	log.Info("lgpd retention scheduler started",
+		"task", queue.TypeLGPDRetention, "retention_days", cfg.LGPD.RetentionDays)
 	// Регистрация webhook при старте (задача M2 §6). Не прошла — не стартуем:
 	// без webhook приложение молча не получало бы ни одного апдейта.
 	if err := telegram.RegisterWebhook(bot); err != nil {
@@ -218,10 +232,6 @@ func run(log *slog.Logger) error {
 		return err
 	}
 	issuer := auth.NewIssuer(privKey, time.Duration(cfg.Auth.AccessTokenTTL)*time.Second)
-	// Контракт M7 наружу: M8 оборачивает защищённые роуты в
-	// auth.Middleware(auth.NewVerifier(pubKey)), M9 зовёт VerifyWSProtocol.
-	// До M8 pubKey нужен только на старте — валидация пары ключей.
-	_ = pubKey
 	handlers.NewAuth(handlers.AuthDeps{
 		Managers:   managers,
 		Tokens:     refreshTokens,
@@ -245,6 +255,36 @@ func run(log *slog.Logger) error {
 	}).Register(router)
 	log.Info("payment webhook registered",
 		"gateway", cfg.Payment.Gateway, "testnet", cfg.Payment.UseTestnet)
+
+	// --- M8: REST API менеджера (§4.1) за общим гейтом группы /api:
+	// rate limit (§4.2, ДО auth — флуд не доходит до проверки подписи) →
+	// JWT (M7) → роли §5.2 (admin не наследует manager — обе явно).
+	api := router.Group("/api")
+	if cfg.Server.RateLimitPerMin > 0 {
+		api.Use(handlers.RateLimit(
+			handlers.NewRedisRateLimiter(rdb, cfg.Server.RateLimitPerMin), log))
+	}
+	api.Use(
+		auth.Middleware(auth.NewVerifier(pubKey)),
+		auth.RequireRole(auth.RoleManager, auth.RoleAdmin),
+	)
+	handlers.NewLeads(handlers.LeadsDeps{
+		Leads:    leads,
+		Msgs:     msgs,
+		Payments: payments,
+		Machine:  machine,
+		Log:      log,
+	}).Register(api)
+	handlers.NewLGPD(handlers.LGPDDeps{
+		LGPD:     lgpdRepo,
+		Msgs:     msgs,
+		Payments: payments,
+		Salt:     cfg.LGPD.ErasureSalt,
+		Log:      log,
+	}).Register(api)
+	log.Info("rest api registered",
+		"rate_limit_per_min", cfg.Server.RateLimitPerMin,
+		"lgpd_retention_days", cfg.LGPD.RetentionDays)
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.Server.Port),

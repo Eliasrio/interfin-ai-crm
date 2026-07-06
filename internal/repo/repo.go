@@ -8,6 +8,7 @@ package repo
 
 import (
 	"context"
+	"time"
 
 	"github.com/interfin/interfin-ai-crm/internal/models"
 )
@@ -33,6 +34,11 @@ type LeadRepo interface {
 	// UpdateFields точечно меняет колонки по PK, например
 	// {"pending_task": true} при Redis down (§11.2).
 	UpdateFields(ctx context.Context, id int64, fields map[string]interface{}) error
+	// List — постраничный список живых (deleted_at IS NULL) лидов для
+	// GET /api/leads (M8, §4.1), свежая активность первой. UpdatedSince —
+	// catch-up §10.3: только лиды с last_activity_at позже метки (быстро:
+	// idx_leads_activity). Возвращает страницу и total под пагинацию M10.
+	List(ctx context.Context, p ListLeadsParams) ([]models.Lead, int64, error)
 	// TransitionStage атомарно (CAS: WHERE stage_id = from) переводит лида
 	// в стадию to, сбрасывает anti_spam_count (§3.5) и обновляет
 	// last_activity_at — точку отсчёта TTL новой стадии (CLAUDE.md §4.7).
@@ -53,6 +59,39 @@ type MessageRepo interface {
 	// ListByLead — последние limit сообщений лида, от старых к новым
 	// (порядок, в котором история уходит в контекст Claude).
 	ListByLead(ctx context.Context, leadID int64, limit int) ([]models.Message, error)
+}
+
+// ListLeadsParams — параметры LeadRepo.List. Limit <= 0 недопустим
+// (значение по умолчанию выбирает хендлер, не репозиторий).
+type ListLeadsParams struct {
+	UpdatedSince *time.Time // catch-up §10.3; nil — без фильтра
+	Limit        int
+	Offset       int
+}
+
+// LGPDRepo — erasure/export/retention (§9, M8). Отдельный интерфейс:
+// операции пересекают таблицы leads/messages/lgpd_audit и намеренно
+// обходят soft-delete-скоуп GORM (Unscoped) — в LeadRepo им не место.
+type LGPDRepo interface {
+	// Erase — «право на забвение» §9.1/§9.3 одной транзакцией:
+	// deleted_at=NOW(), name/phone/tg_username=NULL,
+	// telegram_user_id=hashedTgID (НЕ NULL — колонка UNIQUE NOT NULL),
+	// messages.content='[DELETED]', запись в lgpd_audit.
+	// payment_events НЕ трогает (CLAUDE.md §4.8). ErrNotFound — лида нет
+	// или он уже стёрт (повторный erase не перезатирает хеш).
+	Erase(ctx context.Context, leadID int64, hashedTgID int64, performedBy, ip string) error
+	// GetLeadAny — лид по PK, ВКЛЮЧАЯ стёртых (export §9.1 обязан работать
+	// и после erasure — право на доступ не гаснет вместе с данными).
+	GetLeadAny(ctx context.Context, id int64) (*models.Lead, error)
+	// CreateAudit — след действия с персональными данными (§9.2).
+	CreateAudit(ctx context.Context, a *models.LGPDAudit) error
+	// ListAuditByLead — записи lgpd_audit лида, от старых к новым (export).
+	ListAuditByLead(ctx context.Context, leadID int64) ([]models.LGPDAudit, error)
+	// DeleteErasedBefore — retention-cron §9.1: ФИЗИЧЕСКОЕ удаление лидов,
+	// стёртых (deleted_at) раньше cutoff. messages уходят каскадом,
+	// payment_events выживают с lead_id=NULL (FK SET NULL, миграция 0010).
+	// Возвращает число удалённых лидов.
+	DeleteErasedBefore(ctx context.Context, cutoff time.Time) (int64, error)
 }
 
 // PaymentRepo — payment_events (§8.3).

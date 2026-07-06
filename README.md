@@ -172,6 +172,42 @@ curl -s -b /tmp/jar -c /tmp/jar -X POST localhost:8080/auth/refresh
 close 4001). Просроченный access → 401 `ERR_TOKEN_EXPIRED`, чужая роль →
 403 `ERR_FORBIDDEN` (AQ²-2).
 
+## REST API менеджера (M8, §4)
+
+Все `/api/*` — за цепочкой: rate limit 100 req/min per IP (§4.2, 429
+`ERR_RATE_LIMITED`) → Bearer JWT (M7) → роли manager/admin (§5.2). Ошибки —
+`{"error","code"}` + статус (§4.2). Секрет `LGPD_SALT` обязателен (соль
+хеша `telegram_user_id` при erasure §9.3; `openssl rand -hex 32`, в prod
+не менять после первых erasure).
+
+```bash
+TOKEN=...  # access_token из /auth/login
+
+# Список: пагинация + catch-up для M9 (§10.3, строгое «позже», по индексу)
+curl -s 'localhost:8080/api/leads?limit=50&offset=0' -H "Authorization: Bearer $TOKEN"
+curl -s 'localhost:8080/api/leads?updated_since=2026-07-06T12:00:00Z' -H "Authorization: Bearer $TOKEN"
+
+# Карточка (лид + диалог + платежи) и текущая стадия (polling fallback §10.1)
+curl -s localhost:8080/api/leads/1 -H "Authorization: Bearer $TOKEN"
+curl -s localhost:8080/api/leads/1/stage -H "Authorization: Bearer $TOKEN"
+
+# Ручная смена стадии — через state machine M5 (ActorManager):
+# запрещённый переход → 400 ERR_INVALID_TRANSITION, гонка → 409 ERR_STAGE_CONFLICT
+curl -s -X PATCH localhost:8080/api/leads/1/stage \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"stage_id":5}'
+
+# LGPD (§9): erasure — PII=NULL, messages='[DELETED]', telegram_user_id → хеш
+# (НЕ NULL), payment_events НЕ трогаются (фиск. retention 5 лет); export — JSON
+# messages + payment_events + lgpd_audit. Оба пишут след в lgpd_audit.
+curl -s -X DELETE localhost:8080/api/lgpd/leads/1/erase -H "Authorization: Bearer $TOKEN"
+curl -s localhost:8080/api/lgpd/leads/1/export -H "Authorization: Bearer $TOKEN"
+```
+
+Retention-cron §9.1: `lgpd:retention` (asynq scheduler, 04:00 UTC ежедневно)
+физически удаляет лидов с `deleted_at` старше 90 дней; платежи выживают
+с `lead_id=NULL` (FK `ON DELETE SET NULL`, миграция 0010).
+
 ## Про критерии приёмки
 
 Метки `IQ-N` / `AQ²-N` в критериях ссылаются на review-историю ТЗ (баги,

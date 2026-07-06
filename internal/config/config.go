@@ -34,6 +34,9 @@ type Config struct {
 
 type ServerConfig struct {
 	Port int `mapstructure:"port"`
+	// RateLimitPerMin — §4.2: 100 запросов в минуту с одного IP на /api/*,
+	// сверх лимита — 429. 0 = лимит выключен (юнит-тестовые yaml).
+	RateLimitPerMin int `mapstructure:"rate_limit_per_min"`
 }
 
 type TelegramConfig struct {
@@ -143,6 +146,9 @@ type LGPDConfig struct {
 	PreserveFinancialRecords bool     `mapstructure:"preserve_financial_records"` // AQ²-fix #4
 	ErasureAnonymizeFields   []string `mapstructure:"erasure_anonymize_fields"`
 	ErasureHashFields        []string `mapstructure:"erasure_hash_fields"` // AQ²-fix #4
+	// ErasureSalt — соль hash(user_id + salt) при erasure (§9.3). Секрет
+	// (LGPD_SALT, §4.9): без соли хеш обратим перебором известных Telegram ID.
+	ErasureSalt string `mapstructure:"erasure_salt"`
 }
 
 type MonitoringConfig struct {
@@ -174,6 +180,9 @@ var requiredEnv = []string{
 	// без ключей /auth/login не подпишет ни одного токена.
 	"JWT_PRIVATE_KEY_PATH",
 	"JWT_PUBLIC_KEY_PATH",
+	// M8 (LGPD): соль хеширования telegram_user_id при erasure (§9.3).
+	// Тихо пустая соль = обратимый хеш, поэтому переменная обязательна.
+	"LGPD_SALT",
 }
 
 // defaultEnv — значения для незаданных НЕобязательных переменных.
@@ -265,6 +274,22 @@ func (c *Config) validate() error {
 	}
 	if c.Server.Port <= 0 || c.Server.Port > 65535 {
 		problems = append(problems, fmt.Sprintf("server.port вне диапазона: %d", c.Server.Port))
+	}
+	if c.Server.RateLimitPerMin < 0 {
+		problems = append(problems, fmt.Sprintf(
+			"server.rate_limit_per_min отрицателен: %d (§4.2)", c.Server.RateLimitPerMin))
+	}
+	// M8: lgpd-секция проверяется, когда заполнена (юнит-тестовые yaml без
+	// неё валидны — LGPD-ручки там не собираются). Пустая соль при заданной
+	// секции — это обратимый «хеш» telegram_user_id, стартовать нельзя.
+	if l := c.LGPD; l.RetentionDays != 0 || l.ErasureSalt != "" {
+		switch {
+		case l.RetentionDays <= 0:
+			problems = append(problems, fmt.Sprintf(
+				"lgpd.retention_days должен быть > 0: %d (§9.1)", l.RetentionDays))
+		case l.ErasureSalt == "":
+			problems = append(problems, "lgpd.erasure_salt пуст (LGPD_SALT, §9.3)")
+		}
 	}
 	// AQ²-fix #3: pgbouncer transaction mode ломает prepared statements.
 	if c.Database.PrepareStmt {

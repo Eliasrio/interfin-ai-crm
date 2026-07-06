@@ -78,6 +78,33 @@ func (r *leadRepo) UpdateFields(ctx context.Context, id int64, fields map[string
 	return nil
 }
 
+func (r *leadRepo) List(ctx context.Context, p ListLeadsParams) ([]models.Lead, int64, error) {
+	if p.Limit <= 0 {
+		return nil, 0, fmt.Errorf("repo: list leads: limit %d невалиден", p.Limit)
+	}
+	// Стёртых (deleted_at) исключает soft-delete-скоуп GORM сам.
+	q := r.db.WithContext(ctx).Model(&models.Lead{})
+	if p.UpdatedSince != nil {
+		// §10.3: строгое «позже» — события с ts == updated_since клиент уже
+		// видел. Фильтр и сортировка ложатся на idx_leads_activity.
+		q = q.Where("last_activity_at > ?", *p.UpdatedSince)
+	}
+	var total int64
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, fmt.Errorf("repo: list leads: count: %w", err)
+	}
+	var leads []models.Lead
+	// id DESC вторым ключом: детерминированный порядок при равных
+	// last_activity_at — страницы не дублируют и не теряют строки.
+	err := q.Order("last_activity_at DESC, id DESC").
+		Limit(p.Limit).Offset(p.Offset).
+		Find(&leads).Error
+	if err != nil {
+		return nil, 0, fmt.Errorf("repo: list leads: %w", err)
+	}
+	return leads, total, nil
+}
+
 func (r *leadRepo) TransitionStage(ctx context.Context, id int64, from, to int16) (bool, error) {
 	// Один UPDATE: смена стадии и сброс per-stage счётчика anti-spam (§3.5)
 	// неразделимы — раздельные запросы оставили бы окно, где лид уже в новой

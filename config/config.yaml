@@ -4,6 +4,7 @@
 
 server: # не из §12: HTTP-порт приложения (§13.2 healthcheck ходит на :8080)
   port: ${HTTP_PORT}
+  rate_limit_per_min: 100      # §4.2: 100 req/min per IP на /api/* → 429
 
 telegram:
   bot_token: ${TELEGRAM_BOT_TOKEN}
@@ -98,6 +99,10 @@ lgpd:
   preserve_financial_records: true          # AQ²-fix #4
   erasure_anonymize_fields: [name, phone, tg_username]
   erasure_hash_fields: [telegram_user_id]   # AQ²-fix #4
+  # Соль hash(user_id + salt) при erasure (§9.3) — секрет, только из env.
+  # Менять после первых erasure нельзя: повторный запрос по тому же лиду
+  # дал бы другой хеш (уникальность выдержит, детерминированность — нет).
+  erasure_salt: ${LGPD_SALT}
 
 monitoring:
   prometheus_port: 9090
