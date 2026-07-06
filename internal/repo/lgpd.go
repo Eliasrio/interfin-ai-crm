@@ -36,7 +36,9 @@ func (r *lgpdRepo) Erase(ctx context.Context, leadID int64, hashedTgID int64, pe
 				"name":        nil,
 				"phone":       nil,
 				"tg_username": nil,
-				// UNIQUE NOT NULL — хеш, не NULL (§9.3, AQ²-4, CLAUDE.md §4.8)
+				// NOT NULL — хеш, не NULL (§9.3, AQ²-4, CLAUDE.md §4.8).
+				// UNIQUE — только по живым строкам (0011): у стёртых хеш
+				// детерминированный и при повторном цикле erase совпадает.
 				"telegram_user_id": hashedTgID,
 			})
 		if res.Error != nil {

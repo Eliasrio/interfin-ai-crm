@@ -92,7 +92,10 @@ M0 Скелет ──▶ M1 Данные ──┬──▶ M2 Ingestion ──
    `inspector.DeleteTask` + новый enqueue.
 
 8. **LGPD erasure НЕ трогает `payment_events`** (фискальная retention 5 лет).
-   `telegram_user_id` при erasure ХЕШИРУЕТСЯ (не NULL — оно UNIQUE NOT NULL).
+   `telegram_user_id` при erasure ХЕШИРУЕТСЯ (не NULL — оно NOT NULL).
+   UNIQUE на нём — только по живым строкам (частичный индекс, 0011):
+   хеш детерминированный, повторный цикл create→erase одного человека
+   легально даёт две стёртые строки с одним хешом.
 
 9. **Секреты только через env / Docker secrets.** Никаких ключей в коде, конфигах,
    коммитах. Config читается через viper с `${ENV_VAR}` подстановкой.

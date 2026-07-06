@@ -265,3 +265,68 @@ func TestRetentionDeleteErasedBefore(t *testing.T) {
 		t.Fatalf("payment_events после retention: %d с lead_id=NULL, ждали 1", evCount)
 	}
 }
+
+// TestEraseRepeatedCycle — баг живого стенда M10: create→erase→create→erase
+// одного telegram_user_id. Хеш детерминирован (§9.3), поэтому второй erase
+// пишет тот же хеш, что уже лежит в первой стёртой строке; глобальный UNIQUE
+// из 0003 падал с 23505 и DELETE /api/lgpd/leads/:id/erase отвечал 500.
+// После 0011 уникальность — только по живым строкам: цикл проходит, обе
+// стёртые строки сосуществуют с одним хешом, дедуп живых сохраняется.
+func TestEraseRepeatedCycle(t *testing.T) {
+	gdb := testDB(t)
+	leads, _, _ := New(gdb)
+	lgpdRepo := NewLGPD(gdb)
+	ctx := context.Background()
+
+	const tgID = int64(777000555)
+	hashed := lgpd.HashTelegramUserID(tgID, "test-salt")
+
+	first := mkLead(t, leads, tgID)
+	if err := lgpdRepo.Erase(ctx, first.ID, hashed, "manager:1", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	// Человек вернулся: новый лид с тем же telegram_user_id создаётся
+	// (стёртая строка держит хеш, не исходный ID — конфликта нет).
+	second := mkLead(t, leads, tgID)
+	if second.ID == first.ID {
+		t.Fatal("ожидали новую строку, а не реюз старой")
+	}
+
+	// Повторный erase — тот же детерминированный хеш. До 0011: 23505.
+	if err := lgpdRepo.Erase(ctx, second.ID, hashed, "manager:1", ""); err != nil {
+		t.Fatalf("erase вернувшегося лида: %v", err)
+	}
+
+	// Обе стёртые строки сосуществуют с одинаковым хешом (до retention §9.1).
+	for _, id := range []int64{first.ID, second.ID} {
+		got, err := lgpdRepo.GetLeadAny(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !got.DeletedAt.Valid || got.TelegramUserID != hashed {
+			t.Fatalf("лид %d: deleted_at.Valid=%v tg=%d, ждали хеш %d",
+				id, got.DeletedAt.Valid, got.TelegramUserID, hashed)
+		}
+	}
+	// Живых с этим telegram_user_id не осталось.
+	if _, err := leads.GetByTelegramUserID(ctx, tgID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("GetByTelegramUserID: %v, ждали ErrNotFound", err)
+	}
+	// По одной audit-записи на каждый erase (§9.2).
+	for _, id := range []int64{first.ID, second.ID} {
+		if audit, _ := lgpdRepo.ListAuditByLead(ctx, id); len(audit) != 1 {
+			t.Fatalf("lgpd_audit лида %d: %d записей, ждали 1", id, len(audit))
+		}
+	}
+
+	// Дедуп ЖИВЫХ лидов не потерян: третий цикл создаётся, дубль — нет.
+	third := mkLead(t, leads, tgID)
+	dup := &models.Lead{TelegramUserID: tgID, StageID: 1}
+	if err := leads.Create(ctx, dup); err == nil {
+		t.Fatal("второй активный лид с тем же telegram_user_id создался — уникальность живых потеряна")
+	}
+	if _, err := leads.GetByID(ctx, third.ID); err != nil {
+		t.Fatal(err)
+	}
+}

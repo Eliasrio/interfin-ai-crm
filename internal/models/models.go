@@ -111,7 +111,7 @@ const (
 // Lead — §8.1. Строка Kanban-доски: один Telegram-пользователь = один лид.
 type Lead struct {
 	ID               int64          `gorm:"column:id;primaryKey"`
-	TelegramUserID   int64          `gorm:"column:telegram_user_id"` // UNIQUE NOT NULL; при erasure хешируется, не NULL (CLAUDE.md §4.8)
+	TelegramUserID   int64          `gorm:"column:telegram_user_id"` // NOT NULL, UNIQUE по живым (0011); при erasure хешируется, не NULL (CLAUDE.md §4.8)
 	Name             *string        `gorm:"column:name"`
 	Phone            *string        `gorm:"column:phone"`
 	TgUsername       *string        `gorm:"column:tg_username"`
