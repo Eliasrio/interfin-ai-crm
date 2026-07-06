@@ -60,6 +60,7 @@ func WithRetryDelayFunc(f asynq.RetryDelayFunc) Option {
 func New(
 	redisCfg config.RedisConfig,
 	proc *Processor,
+	summarizer *Summarizer,
 	alertSender Sender,
 	managerChatID int64,
 	log *slog.Logger,
@@ -77,6 +78,8 @@ func New(
 
 	mux := asynq.NewServeMux()
 	mux.HandleFunc(queue.TypeProcessInbound, proc.HandleProcessInbound)
+	// M4 §7.3: фоновая генерация сводки диалога (гонку гасит Redis-замок).
+	mux.HandleFunc(queue.TypeSummaryGenerate, summarizer.HandleSummaryGenerate)
 	// queue.TypeTTLExpire обработчика пока не имеет: ставить TTL-задачи
 	// начнёт M5, он же добавит handler смены стадии.
 

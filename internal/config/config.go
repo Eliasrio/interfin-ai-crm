@@ -135,6 +135,8 @@ var requiredEnv = []string{
 	"TELEGRAM_WEBHOOK_URL",
 	// M3 (воркер + Claude): без ключа воркер не может звать /v1/messages.
 	"ANTHROPIC_API_KEY",
+	// M4 (RAG): эмбеддинги Voyage voyage-3 (AQ²-fix #2 — НЕ OpenAI).
+	"VOYAGE_API_KEY",
 }
 
 // defaultEnv — значения для незаданных НЕобязательных переменных.
@@ -257,6 +259,30 @@ func (c *Config) validate() error {
 			problems = append(problems, "claude: бюджет + claude_reply_tokens превышают 9000 (IQ-6)")
 		case cl.CountTokensThreshold <= 0:
 			problems = append(problems, "claude.count_tokens_threshold должен быть > 0 (AQ²-fix #7)")
+		}
+	}
+
+	// M4: embeddings-секция проверяется, когда задан api_key (юнит-тестовые
+	// yaml без ключа могут не заполнять её — RAG там не собирается).
+	if em := c.Embeddings; em.APIKey != "" {
+		switch {
+		case em.Provider != "voyage":
+			// AQ²-fix #2: OPENAI_API_KEY нигде не требуется.
+			problems = append(problems, fmt.Sprintf(
+				"embeddings.provider должен быть \"voyage\", не %q (AQ²-2)", em.Provider))
+		case em.Model == "":
+			problems = append(problems, "embeddings.model пуст")
+		case em.Dimensions != 1024:
+			// §7.1: pgvector-колонка vector(1024) — иная размерность не запишется.
+			problems = append(problems, fmt.Sprintf(
+				"embeddings.dimensions должен быть 1024 (§7.1), не %d", em.Dimensions))
+		}
+		// RAG-параметры (§7.1): порог и top_k читаются отсюда, не из констант.
+		if r := c.RAG; r.CosineThreshold <= 0 || r.CosineThreshold >= 1 {
+			problems = append(problems, fmt.Sprintf(
+				"rag.cosine_threshold вне (0,1): %v", r.CosineThreshold))
+		} else if r.TopK <= 0 {
+			problems = append(problems, fmt.Sprintf("rag.top_k должен быть > 0: %d", r.TopK))
 		}
 	}
 

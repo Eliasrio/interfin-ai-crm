@@ -1,7 +1,8 @@
 // processor.go — обработчик process:inbound: Worker Pipeline SRS §6.2.
 //
-//  1. Typing  2) Контекст (token budget)  3) Anthropic /v1/messages
-//  4. Save outbound  5) bot.Send  (6: PUBLISH crm:events — появится в M5)
+//  1. Typing  2) RAG retrieval (M4 §7.1)  3) Контекст (token budget, summary)
+//  4. Anthropic /v1/messages  5) Save outbound  6) bot.Send
+//     (7: PUBLISH crm:events — появится в M5)
 //
 // Идемпотентность (§6.3): дубли задач гасит TaskID+Unique ещё на enqueue (M2);
 // здесь — идемпотентность РЕТРАЯ. Порядок «save → send» означает, что при
@@ -15,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/hibiken/asynq"
 
@@ -41,39 +43,52 @@ type Completer interface {
 	Complete(ctx context.Context, system string, msgs []claude.Message) (string, error)
 }
 
-// Processor — зависимости обработчика process:inbound.
-type Processor struct {
-	leads    repo.LeadRepo
-	msgs     repo.MessageRepo
-	budgeter *Budgeter
-	ai       Completer
-	sender   Sender
-	log      *slog.Logger
+// Retriever — RAG-поиск по базе знаний (в проде *rag.Retriever, в тестах фейк).
+type Retriever interface {
+	Retrieve(ctx context.Context, leadID int64, query string) ([]repo.ScoredChunk, error)
 }
 
-func NewProcessor(
-	leads repo.LeadRepo,
-	msgs repo.MessageRepo,
-	budgeter *Budgeter,
-	ai Completer,
-	sender Sender,
-	log *slog.Logger,
-) *Processor {
-	return &Processor{leads: leads, msgs: msgs, budgeter: budgeter, ai: ai, sender: sender, log: log}
+// ProcessorDeps — зависимости обработчика process:inbound. Retriever,
+// Summaries и SummaryEnq допускают nil (диалог без RAG/summary) — это
+// режим юнит-тестов M3; боевая сборка (cmd/server) задаёт всё.
+type ProcessorDeps struct {
+	Leads    repo.LeadRepo
+	Msgs     repo.MessageRepo
+	Budgeter *Budgeter
+	AI       Completer
+	Sender   Sender
+
+	// M4 (RAG + summary):
+	Retriever     Retriever
+	Summaries     repo.SummaryRepo
+	SummaryEnq    queue.SummaryEnqueuer
+	SummaryEveryN int // kanban.summary_every_n_messages (§7.3: 15)
+
+	Log *slog.Logger
+}
+
+// Processor — обработчик process:inbound.
+type Processor struct {
+	deps ProcessorDeps
+}
+
+func NewProcessor(deps ProcessorDeps) *Processor {
+	return &Processor{deps: deps}
 }
 
 // HandleProcessInbound — handler задачи process:inbound (контракт M2→M3).
 // Возврат ошибки = ретрай Asynq (3×, backoff 2/8/32с — server.go), затем
 // dead letter + алерт (§6.3). Возврат nil = задача выполнена.
 func (p *Processor) HandleProcessInbound(ctx context.Context, t *asynq.Task) error {
+	d := p.deps
 	var payload queue.InboundPayload
 	if err := json.Unmarshal(t.Payload(), &payload); err != nil {
 		// Битый payload не починится ретраем — сразу в архив (§6.3).
 		return fmt.Errorf("worker: payload process:inbound не разобран: %v: %w", err, asynq.SkipRetry)
 	}
-	log := p.log.With("lead_id", payload.LeadID, "tg_msg_id", payload.MsgID)
+	log := d.Log.With("lead_id", payload.LeadID, "tg_msg_id", payload.MsgID)
 
-	lead, err := p.leads.GetByID(ctx, payload.LeadID)
+	lead, err := d.Leads.GetByID(ctx, payload.LeadID)
 	if errors.Is(err, repo.ErrNotFound) {
 		// Лид стёрт (LGPD erasure) между enqueue и обработкой — задача неактуальна.
 		log.Warn("worker: лид не найден, задача пропущена")
@@ -83,7 +98,7 @@ func (p *Processor) HandleProcessInbound(ctx context.Context, t *asynq.Task) err
 		return fmt.Errorf("worker: загрузка лида: %w", err)
 	}
 
-	history, err := p.msgs.ListByLead(ctx, lead.ID, historyFetchLimit)
+	history, err := d.Msgs.ListByLead(ctx, lead.ID, historyFetchLimit)
 	if err != nil {
 		return fmt.Errorf("worker: история сообщений: %w", err)
 	}
@@ -92,47 +107,65 @@ func (p *Processor) HandleProcessInbound(ctx context.Context, t *asynq.Task) err
 		return nil
 	}
 
+	// Триггер сводки §7.3 — до генерации ответа: постановка идемпотентна
+	// (TaskID по (lead, count)), а так её не теряет ни ретрай, ни ветка
+	// переотправки ниже.
+	p.maybeEnqueueSummary(ctx, lead, log)
+
 	// Идемпотентность ретрая: последний в истории outbound = ответ уже
-	// сгенерирован и сохранён (шаг 4 прошёл), упасть мог только Send.
+	// сгенерирован и сохранён (шаг «save» прошёл), упасть мог только Send.
 	// Переотправляем сохранённое, к Claude не ходим.
 	if last := history[len(history)-1]; last.Direction == models.DirectionOutbound {
 		log.Info("worker: ответ уже сохранён, переотправка без вызова Claude")
-		if err := p.sender.Send(lead.TelegramUserID, last.Content); err != nil {
+		if err := d.Sender.Send(lead.TelegramUserID, last.Content); err != nil {
 			return fmt.Errorf("worker: переотправка ответа: %w", err)
 		}
 		return nil
 	}
 
 	// 1) Typing — best effort: недоставленный индикатор не стоит ретрая.
-	if err := p.sender.Typing(lead.TelegramUserID); err != nil {
+	if err := d.Sender.Typing(lead.TelegramUserID); err != nil {
 		log.Warn("worker: typing не отправлен", "error", err)
 	}
 
-	// 2) Контекст в пределах бюджета §7.2. Summary пустой до M4 (§7.3).
-	system, msgs, stats, err := p.budgeter.Build(ctx, systemPrompt, "", history)
+	// 2) RAG §7.1: знания под последний вопрос лида. Ошибка Voyage/БД —
+	// транзиент, лечится ретраем; rag_miss — НЕ ошибка (fallback внутри
+	// ретривера уже оставил след в rag_audit), диалог идёт без чанков.
+	var chunks []repo.ScoredChunk
+	if query := strings.TrimSpace(history[len(history)-1].Content); d.Retriever != nil && query != "" {
+		if chunks, err = d.Retriever.Retrieve(ctx, lead.ID, query); err != nil {
+			return fmt.Errorf("worker: rag retrieval: %w", err)
+		}
+	}
+
+	// 3) Контекст в пределах бюджета §7.2: system+RAG ≤ 2000, summary ≤ 1000.
+	summary := p.loadSummary(ctx, lead.ID, log)
+	system, msgs, stats, err := d.Budgeter.Build(ctx, composeSystemPrompt(systemPrompt, chunks), summary, history)
 	if err != nil {
 		return fmt.Errorf("worker: сборка контекста: %w", err)
 	}
 
-	// 3) Claude. Ошибка (5xx, rate limit, сеть) → ретрай, затем dead letter.
-	reply, err := p.ai.Complete(ctx, system, msgs)
+	// 4) Claude. Ошибка (5xx, rate limit, сеть) → ретрай, затем dead letter.
+	reply, err := d.AI.Complete(ctx, system, msgs)
 	if err != nil {
 		return fmt.Errorf("worker: вызов claude: %w", err)
 	}
 
-	// 4) Save outbound. Счётчики лида НЕ трогаем (CLAUDE.md §4.3).
+	// 5) Save outbound. Счётчики лида НЕ трогаем (CLAUDE.md §4.3).
 	replyTokens := estimateTokens(reply)
 	out := &models.Message{LeadID: lead.ID, Content: reply, Tokens: &replyTokens}
-	if err := p.msgs.CreateOutbound(ctx, out); err != nil {
+	if err := d.Msgs.CreateOutbound(ctx, out); err != nil {
 		return fmt.Errorf("worker: сохранение ответа: %w", err)
 	}
 
-	// 5) Send. При падении ретрай уйдёт в ветку переотправки выше.
-	if err := p.sender.Send(lead.TelegramUserID, reply); err != nil {
+	// 6) Send. При падении ретрай уйдёт в ветку переотправки выше.
+	if err := d.Sender.Send(lead.TelegramUserID, reply); err != nil {
 		return fmt.Errorf("worker: отправка ответа: %w", err)
 	}
 
 	log.Info("worker: ответ отправлен",
+		"rag_chunks", len(chunks),
+		"summary_used", summary != "",
 		"estimate_tokens", stats.EstimateTokens,
 		"exact_tokens", stats.ExactTokens,
 		"count_tokens_calls", stats.ExactCalls,
@@ -140,4 +173,45 @@ func (p *Processor) HandleProcessInbound(ctx context.Context, t *asynq.Task) err
 		"reply_tokens_estimate", replyTokens,
 	)
 	return nil
+}
+
+// loadSummary достаёт сводку диалога (§7.3) для инжекта в контекст.
+// Отсутствие сводки — норма (молодой диалог); ошибка БД деградирует до
+// ответа без сводки, а не до dead letter.
+func (p *Processor) loadSummary(ctx context.Context, leadID int64, log *slog.Logger) string {
+	if p.deps.Summaries == nil {
+		return ""
+	}
+	s, err := p.deps.Summaries.GetByLead(ctx, leadID)
+	switch {
+	case errors.Is(err, repo.ErrNotFound):
+		return ""
+	case err != nil:
+		log.Warn("worker: сводка не загружена, отвечаем без неё", "error", err)
+		return ""
+	}
+	return s.Content
+}
+
+// maybeEnqueueSummary ставит summary:generate на каждом N-м inbound (§7.3).
+// message_count считает только inbound (CLAUDE.md §4.3), поэтому кратность
+// проверяется по нему как есть. Неудача постановки не роняет диалог:
+// следующий 15-блок сгенерирует сводку заново.
+func (p *Processor) maybeEnqueueSummary(ctx context.Context, lead *models.Lead, log *slog.Logger) {
+	d := p.deps
+	if d.SummaryEnq == nil || d.SummaryEveryN <= 0 {
+		return
+	}
+	if lead.MessageCount == 0 || lead.MessageCount%d.SummaryEveryN != 0 {
+		return
+	}
+	err := d.SummaryEnq.EnqueueSummary(ctx, lead.ID, lead.MessageCount)
+	switch {
+	case errors.Is(err, queue.ErrDuplicate):
+		// Уже стоит (ретрай или дубль апдейта) — это и есть §4.5 в работе.
+	case err != nil:
+		log.Warn("worker: задача summary не поставлена", "error", err)
+	default:
+		log.Info("worker: поставлена задача summary", "message_count", lead.MessageCount)
+	}
 }

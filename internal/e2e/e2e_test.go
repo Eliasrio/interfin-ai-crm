@@ -166,6 +166,7 @@ func TestE2E_LeadWritesAndGetsClaudeReply(t *testing.T) {
 	}
 
 	leads, msgs, _ := repo.New(gormDB)
+	_, summaries, _ := repo.NewRAG(gormDB)
 
 	// --- «Telegram»: локальный мок Bot API ---
 	mock := &telegramMock{}
@@ -207,8 +208,23 @@ func TestE2E_LeadWritesAndGetsClaudeReply(t *testing.T) {
 	defer q.Close()
 
 	sender := worker.NewTelebotSender(bot)
+	// Retriever не задан: e2e закрывает критерий M3 (диалог), база знаний
+	// в тестовой БД пуста; RAG-контур закрывают тесты M4 (rag/repo/worker).
+	rdb := redis.NewClient(&redis.Options{Addr: redisAddr})
+	defer rdb.Close()
 	wrk := worker.New(redisCfg,
-		worker.NewProcessor(leads, msgs, budgeter, ai, sender, log),
+		worker.NewProcessor(worker.ProcessorDeps{
+			Leads:         leads,
+			Msgs:          msgs,
+			Budgeter:      budgeter,
+			AI:            ai,
+			Sender:        sender,
+			Summaries:     summaries,
+			SummaryEnq:    q,
+			SummaryEveryN: 15,
+			Log:           log,
+		}),
+		worker.NewSummarizer(leads, msgs, summaries, ai, worker.NewRedisLocker(rdb), log),
 		sender, 0, log)
 	if err := wrk.Start(); err != nil {
 		t.Fatalf("worker start: %v", err)

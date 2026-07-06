@@ -108,7 +108,8 @@ func TestWorker_1000Duplicates_OneExecution(t *testing.T) {
 	}
 
 	srv := New(redisCfg,
-		NewProcessor(leads, msgs, mustBudgeter(t), ai, snd, testLogger()),
+		newTestProcessor(t, leads, msgs, ai, snd),
+		newTestSummarizer(leads, msgs, &fakeSummaries{}, ai),
 		snd, 0, testLogger())
 	if err := srv.Start(); err != nil {
 		t.Fatalf("start: %v", err)
@@ -152,7 +153,8 @@ func TestWorker_ClaudeDown_RetriesThenDeadLetterAndAlert(t *testing.T) {
 	// DelayedTaskCheckInterval тоже: по умолчанию asynq возвращает созревшие
 	// ретраи в очередь раз в 5 с, три ретрая не влезли бы в таймаут теста.
 	srv := New(redisCfg,
-		NewProcessor(leads, msgs, mustBudgeter(t), ai, snd, testLogger()),
+		newTestProcessor(t, leads, msgs, ai, snd),
+		newTestSummarizer(leads, msgs, &fakeSummaries{}, ai),
 		snd, managerChatID, testLogger(),
 		WithRetryDelayFunc(func(int, error, *asynq.Task) time.Duration {
 			return 50 * time.Millisecond

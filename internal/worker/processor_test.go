@@ -168,16 +168,18 @@ func (f *fakeSender) sentCount() int {
 }
 
 type fakeAI struct {
-	mu    sync.Mutex
-	calls int
-	reply string
-	err   error
+	mu      sync.Mutex
+	calls   int
+	reply   string
+	err     error
+	systems []string // system-промпты входящих вызовов (проверка RAG/summary M4)
 }
 
-func (f *fakeAI) Complete(_ context.Context, _ string, _ []claude.Message) (string, error) {
+func (f *fakeAI) Complete(_ context.Context, system string, _ []claude.Message) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls++
+	f.systems = append(f.systems, system)
 	if f.err != nil {
 		return "", f.err
 	}
@@ -188,6 +190,15 @@ func (f *fakeAI) callCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.calls
+}
+
+func (f *fakeAI) lastSystem() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.systems) == 0 {
+		return ""
+	}
+	return f.systems[len(f.systems)-1]
 }
 
 // --- сборка ---
@@ -211,11 +222,16 @@ func inboundTask(t *testing.T, leadID int64, msgID int) *asynq.Task {
 
 func newTestProcessor(t *testing.T, leads *fakeLeads, msgs *fakeMsgs, ai *fakeAI, snd *fakeSender) *Processor {
 	t.Helper()
-	budgeter, err := NewBudgeter(budgetConfig(), &fakeCounter{})
-	if err != nil {
-		t.Fatalf("NewBudgeter: %v", err)
-	}
-	return NewProcessor(leads, msgs, budgeter, ai, snd, testLogger())
+	// Retriever/Summaries/SummaryEnq не заданы — сценарии M3 (диалог без RAG);
+	// сценарии M4 собирают процессор сами (processor_rag_test.go).
+	return NewProcessor(ProcessorDeps{
+		Leads:    leads,
+		Msgs:     msgs,
+		Budgeter: mustBudgeter(t),
+		AI:       ai,
+		Sender:   snd,
+		Log:      testLogger(),
+	})
 }
 
 var testLead = &models.Lead{ID: 7, TelegramUserID: 424242, StageID: 1}

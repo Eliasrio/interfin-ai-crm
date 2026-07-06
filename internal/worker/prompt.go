@@ -1,13 +1,19 @@
-// prompt.go — системный промпт бота (M3, база без RAG).
+// prompt.go — системный промпт бота (M3 — база, M4 — RAG-chunks).
 //
-// M4 добавит сюда RAG-chunks; суммарно system-блок обязан оставаться
-// в пределах budget.system_prompt = 2000 токенов (§7.2) — за этим следит
+// Суммарно system-блок (база + RAG) обязан оставаться в пределах
+// budget.system_prompt = 2000 токенов (§7.2) — за этим следит
 // Budgeter.Build (truncateToTokens).
 package worker
 
+import (
+	"fmt"
+	"strings"
+
+	"github.com/interfin/interfin-ai-crm/internal/repo"
+)
+
 // systemPrompt — базовая роль ассистента INTERFIN GROUP (SRS §2, §7).
-// Текст намеренно короткий (< 2000 токенов с запасом): бюджет system-блока
-// делится с RAG-контекстом, который появится в M4.
+// Текст намеренно короткий: бюджет system-блока делится с RAG-контекстом.
 const systemPrompt = `Ты — AI-ассистент компании INTERFIN GROUP LTDA (Бузиос, Бразилия).
 Ты общаешься с русскоязычными клиентами в Telegram и помогаешь им с вопросами
 об инвестиционных и финансовых услугах компании.
@@ -23,3 +29,20 @@ const systemPrompt = `Ты — AI-ассистент компании INTERFIN G
 - Никогда не проси и не принимай пароли, приватные ключи или коды подтверждения.
 - Если клиент просит удалить его данные — объясни, что запрос передан менеджеру
   (право на удаление по LGPD).`
+
+// composeSystemPrompt приклеивает к базовому промпту найденные RAG-чанки
+// (M4 §7.1). Пусто (rag_miss или RAG выключен) — возвращает базу как есть:
+// это и есть fallback «отвечаем без RAG».
+func composeSystemPrompt(base string, chunks []repo.ScoredChunk) string {
+	if len(chunks) == 0 {
+		return base
+	}
+	var b strings.Builder
+	b.WriteString(base)
+	b.WriteString("\n\nВыдержки из базы знаний компании, релевантные вопросу клиента.\n")
+	b.WriteString("Опирайся на них при ответе; если ответа в них нет — действуй по правилам выше:")
+	for i, c := range chunks {
+		fmt.Fprintf(&b, "\n\n[%d] %s", i+1, c.Content)
+	}
+	return b.String()
+}

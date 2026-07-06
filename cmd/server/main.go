@@ -24,8 +24,10 @@ import (
 	"github.com/interfin/interfin-ai-crm/internal/claude"
 	"github.com/interfin/interfin-ai-crm/internal/config"
 	"github.com/interfin/interfin-ai-crm/internal/db"
+	"github.com/interfin/interfin-ai-crm/internal/embeddings"
 	"github.com/interfin/interfin-ai-crm/internal/handlers"
 	"github.com/interfin/interfin-ai-crm/internal/queue"
+	"github.com/interfin/interfin-ai-crm/internal/rag"
 	"github.com/interfin/interfin-ai-crm/internal/repo"
 	"github.com/interfin/interfin-ai-crm/internal/server"
 	"github.com/interfin/interfin-ai-crm/internal/telegram"
@@ -84,6 +86,7 @@ func run(log *slog.Logger) error {
 	}()
 
 	leads, msgs, _ := repo.New(gormDB)
+	knowledge, summaries, ragAudit := repo.NewRAG(gormDB)
 
 	// --- Redis: одиночный (dev) или Sentinel (prod), по конфигу ---
 	var rdb redis.UniversalClient
@@ -129,9 +132,33 @@ func run(log *slog.Logger) error {
 		return err
 	}
 	sender := worker.NewTelebotSender(bot)
+
+	// --- M4: RAG (Voyage + pgvector §7.1) и сводки диалогов (§7.3) ---
+	embedder, err := embeddings.New(cfg.Embeddings)
+	if err != nil {
+		return err
+	}
+	retriever, err := rag.NewRetriever(cfg.RAG, embedder, knowledge, ragAudit, log)
+	if err != nil {
+		return err
+	}
+	summarizer := worker.NewSummarizer(leads, msgs, summaries, ai, worker.NewRedisLocker(rdb), log)
+
 	wrk := worker.New(
 		cfg.Redis,
-		worker.NewProcessor(leads, msgs, budgeter, ai, sender, log),
+		worker.NewProcessor(worker.ProcessorDeps{
+			Leads:         leads,
+			Msgs:          msgs,
+			Budgeter:      budgeter,
+			AI:            ai,
+			Sender:        sender,
+			Retriever:     retriever,
+			Summaries:     summaries,
+			SummaryEnq:    q,
+			SummaryEveryN: cfg.Kanban.SummaryEveryNMessages,
+			Log:           log,
+		}),
+		summarizer,
 		sender,
 		cfg.Telegram.ManagerChatID,
 		log,

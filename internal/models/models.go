@@ -13,6 +13,8 @@ package models
 import (
 	"database/sql/driver"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/shopspring/decimal"
@@ -41,6 +43,62 @@ func (j *JSONB) Scan(src interface{}) error {
 	default:
 		return fmt.Errorf("models: JSONB: неожиданный тип %T", src)
 	}
+	return nil
+}
+
+// Vector — колонка pgvector (vector(1024), §7.1). Отдельный тип обязателен:
+// в SimpleProtocol pgx не знает тип vector, поэтому значение ходит строковым
+// литералом pgvector "[0.1,0.2,...]" в обе стороны.
+type Vector []float32
+
+func (v Vector) Value() (driver.Value, error) {
+	if len(v) == 0 {
+		return nil, nil
+	}
+	var b strings.Builder
+	b.WriteByte('[')
+	for i, f := range v {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(strconv.FormatFloat(float64(f), 'f', -1, 32))
+	}
+	b.WriteByte(']')
+	return b.String(), nil
+}
+
+func (v *Vector) Scan(src interface{}) error {
+	var s string
+	switch raw := src.(type) {
+	case nil:
+		*v = nil
+		return nil
+	case []byte:
+		s = string(raw)
+	case string:
+		s = raw
+	default:
+		return fmt.Errorf("models: Vector: неожиданный тип %T", src)
+	}
+	s = strings.TrimSpace(s)
+	if !strings.HasPrefix(s, "[") || !strings.HasSuffix(s, "]") {
+		return fmt.Errorf("models: Vector: не литерал pgvector: %.32q", s)
+	}
+	body := strings.Trim(s, "[]")
+	if body == "" {
+		*v = Vector{}
+		return nil
+	}
+	parts := strings.Split(body, ",")
+	out := make(Vector, 0, len(parts))
+	for _, p := range parts {
+		f, err := strconv.ParseFloat(strings.TrimSpace(p), 32)
+		if err != nil {
+			return fmt.Errorf("models: Vector: компонент %q: %w", p, err)
+		}
+		out = append(out, float32(f))
+	}
+	*v = out
 	return nil
 }
 
@@ -127,6 +185,33 @@ type LGPDAudit struct {
 
 func (LGPDAudit) TableName() string { return "lgpd_audit" }
 
+// KnowledgeChunk — чанк базы знаний RAG (M4, §7.1). Уникальность
+// (source, chunk_index): переиндексация документа заменяет чанки, не плодит.
+type KnowledgeChunk struct {
+	ID         int64     `gorm:"column:id;primaryKey"`
+	Source     string    `gorm:"column:source"`
+	ChunkIndex int       `gorm:"column:chunk_index"`
+	Content    string    `gorm:"column:content"`
+	// type в теге обязателен: без него GORM принимает слайс за has-many
+	// ассоциацию и падает на разборе модели (vector(1024), voyage-3).
+	Embedding Vector `gorm:"column:embedding;type:vector(1024)"`
+	CreatedAt  time.Time `gorm:"column:created_at"`
+}
+
+func (KnowledgeChunk) TableName() string { return "knowledge_chunks" }
+
+// ConversationSummary — сводка диалога лида (M4, §7.3). Одна строка на лида,
+// перезаписывается каждые 15 inbound; MessageCount — счётчик лида на момент
+// генерации (свежесть: старая сводка не перетирает более новую).
+type ConversationSummary struct {
+	LeadID       int64     `gorm:"column:lead_id;primaryKey"`
+	Content      string    `gorm:"column:content"`
+	MessageCount int       `gorm:"column:message_count"`
+	UpdatedAt    time.Time `gorm:"column:updated_at"`
+}
+
+func (ConversationSummary) TableName() string { return "conversation_summaries" }
+
 // All — реестр всех персистентных моделей для cmd/schema-lint.
 // Добавил модель — добавь её сюда, иначе lint её не проверит.
 func All() []interface{} {
@@ -136,5 +221,7 @@ func All() []interface{} {
 		PaymentEvent{},
 		RagAudit{},
 		LGPDAudit{},
+		KnowledgeChunk{},
+		ConversationSummary{},
 	}
 }
