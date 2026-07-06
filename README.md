@@ -139,6 +139,39 @@ curl -s -X POST localhost:8080/webhook/payment -H "Crypto-Pay-Api-Signature: $SI
 Повтор того же `update_id` в течение 10 минут → 403 (replay-защита §5.5);
 `request_date` старше ±5 минут → 403.
 
+## Аутентификация (M7, §5.1–5.3)
+
+JWT RS256 (access, TTL 15 мин) + opaque refresh-токен (UUID, TTL 7 дней,
+HttpOnly cookie, ротация на каждый refresh). Ключи — ТОЛЬКО файлами
+(Docker secrets, CLAUDE.md §4.9), пароли — только bcrypt-хешами.
+
+```bash
+# 1. Ключи RS256 (однократно; кладутся в ./secrets/, они в .gitignore).
+#    docker compose монтирует их как secrets, локальному запуску нужны
+#    JWT_PRIVATE_KEY_PATH/JWT_PUBLIC_KEY_PATH в .env (см. .env.example).
+./scripts/gen_jwt_keys.sh
+
+# 2. Первая учётка (пароль спросит со stdin, в БД — только bcrypt-хеш)
+POSTGRES_DSN=postgres://postgres:postgres@localhost:5432/interfin?sslmode=disable \
+  go run ./cmd/create-manager -email admin@interfin.com -name "Admin" -role admin
+
+# 3. Логин: access-токен в теле, refresh — в HttpOnly cookie
+curl -s -c /tmp/jar -X POST localhost:8080/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"admin@interfin.com","password":"<пароль>"}'
+# → {"access_token":"eyJ...","expires_in":900}
+
+# 4. Продление — ТОЛЬКО по refresh-cookie (работает при истёкшем access);
+#    старый refresh при этом гасится (ротация), cookie обновляется.
+curl -s -b /tmp/jar -c /tmp/jar -X POST localhost:8080/auth/refresh
+```
+
+Контракт наружу: `auth.Middleware(verifier)` + `auth.RequireRole(...)`
+оборачивают REST-роуты (M8); `verifier.VerifyWSProtocol` валидирует JWT из
+`Sec-WebSocket-Protocol: Bearer.<token>` при upgrade (M9, просрочка →
+close 4001). Просроченный access → 401 `ERR_TOKEN_EXPIRED`, чужая роль →
+403 `ERR_FORBIDDEN` (AQ²-2).
+
 ## Про критерии приёмки
 
 Метки `IQ-N` / `AQ²-N` в критериях ссылаются на review-историю ТЗ (баги,

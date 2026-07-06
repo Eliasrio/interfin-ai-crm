@@ -188,14 +188,14 @@ func (LGPDAudit) TableName() string { return "lgpd_audit" }
 // KnowledgeChunk — чанк базы знаний RAG (M4, §7.1). Уникальность
 // (source, chunk_index): переиндексация документа заменяет чанки, не плодит.
 type KnowledgeChunk struct {
-	ID         int64     `gorm:"column:id;primaryKey"`
-	Source     string    `gorm:"column:source"`
-	ChunkIndex int       `gorm:"column:chunk_index"`
-	Content    string    `gorm:"column:content"`
+	ID         int64  `gorm:"column:id;primaryKey"`
+	Source     string `gorm:"column:source"`
+	ChunkIndex int    `gorm:"column:chunk_index"`
+	Content    string `gorm:"column:content"`
 	// type в теге обязателен: без него GORM принимает слайс за has-many
 	// ассоциацию и падает на разборе модели (vector(1024), voyage-3).
-	Embedding Vector `gorm:"column:embedding;type:vector(1024)"`
-	CreatedAt  time.Time `gorm:"column:created_at"`
+	Embedding Vector    `gorm:"column:embedding;type:vector(1024)"`
+	CreatedAt time.Time `gorm:"column:created_at"`
 }
 
 func (KnowledgeChunk) TableName() string { return "knowledge_chunks" }
@@ -212,6 +212,35 @@ type ConversationSummary struct {
 
 func (ConversationSummary) TableName() string { return "conversation_summaries" }
 
+// Manager — §5.2/M7. Учётка сотрудника CRM: вход по email, роль admin|manager
+// (CHECK в БД). PasswordHash — только bcrypt: пароли в открытом виде не
+// хранятся (критерий приёмки M7). Деактивация — active=false, не удаление.
+type Manager struct {
+	ID           int64     `gorm:"column:id;primaryKey"`
+	Email        string    `gorm:"column:email"` // UNIQUE NOT NULL — логин
+	Name         *string   `gorm:"column:name"`
+	PasswordHash string    `gorm:"column:password_hash"`
+	Role         string    `gorm:"column:role"` // admin | manager (CHECK в БД)
+	Active       bool      `gorm:"column:active"`
+	CreatedAt    time.Time `gorm:"column:created_at"`
+}
+
+func (Manager) TableName() string { return "managers" }
+
+// RefreshToken — §5.1/M7. Серверная сторона refresh-токена: сам opaque UUID
+// живёт только в HttpOnly cookie клиента, здесь — hex(SHA-256) от него.
+// Ротация при /auth/refresh: строка атомарно удаляется (repo.Consume),
+// взамен выдаётся новая — повтор старого токена невозможен.
+type RefreshToken struct {
+	ID        int64     `gorm:"column:id;primaryKey"`
+	TokenHash string    `gorm:"column:token_hash"` // UNIQUE — hex(sha256(uuid))
+	ManagerID int64     `gorm:"column:manager_id"`
+	ExpiresAt time.Time `gorm:"column:expires_at"`
+	CreatedAt time.Time `gorm:"column:created_at"`
+}
+
+func (RefreshToken) TableName() string { return "refresh_tokens" }
+
 // All — реестр всех персистентных моделей для cmd/schema-lint.
 // Добавил модель — добавь её сюда, иначе lint её не проверит.
 func All() []interface{} {
@@ -223,5 +252,7 @@ func All() []interface{} {
 		LGPDAudit{},
 		KnowledgeChunk{},
 		ConversationSummary{},
+		Manager{},
+		RefreshToken{},
 	}
 }

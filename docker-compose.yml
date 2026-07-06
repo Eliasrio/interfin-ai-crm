@@ -69,11 +69,27 @@ services:
       CRYPTOBOT_TESTNET_TOKEN: ${CRYPTOBOT_TESTNET_TOKEN:-}
       CRYPTOBOT_MAINNET_TOKEN: ${CRYPTOBOT_MAINNET_TOKEN:-}
       CRYPTOBOT_USE_TESTNET: ${CRYPTOBOT_USE_TESTNET:-true}
+      # M7: RSA-пара RS256 приходит Docker secrets (CLAUDE.md §4.9, задача
+      # M7-1) — в env только ПУТИ. Сгенерировать: ./scripts/gen_jwt_keys.sh
+      JWT_PRIVATE_KEY_PATH: /run/secrets/jwt_private
+      JWT_PUBLIC_KEY_PATH: /run/secrets/jwt_public
+    secrets:
+      - jwt_private
+      - jwt_public
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+
+# M7: ключи JWT — единственный источник (CLAUDE.md §4.9). Файлы создаёт
+# ./scripts/gen_jwt_keys.sh; каталог secrets/ и *.pem в .gitignore.
+# В Swarm (prod, M11) file-секреты заменяются на docker secret create.
+secrets:
+  jwt_private:
+    file: ./secrets/jwt_private.pem
+  jwt_public:
+    file: ./secrets/jwt_public.pem
 
 volumes:
   pgdata:

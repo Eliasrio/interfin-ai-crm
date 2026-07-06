@@ -21,6 +21,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
 
+	"github.com/interfin/interfin-ai-crm/internal/auth"
 	"github.com/interfin/interfin-ai-crm/internal/claude"
 	"github.com/interfin/interfin-ai-crm/internal/config"
 	"github.com/interfin/interfin-ai-crm/internal/db"
@@ -90,6 +91,7 @@ func run(log *slog.Logger) error {
 
 	leads, msgs, payments := repo.New(gormDB)
 	knowledge, summaries, ragAudit := repo.NewRAG(gormDB)
+	managers, refreshTokens := repo.NewAuth(gormDB)
 
 	// --- Redis: одиночный (dev) или Sentinel (prod), по конфигу ---
 	var rdb redis.UniversalClient
@@ -207,6 +209,28 @@ func run(log *slog.Logger) error {
 
 	handlers.NewTelegramWebhook(leads, msgs, q, cfg.Telegram.WebhookSecret, log).
 		Register(router, telegram.NewDispatcher(bot))
+
+	// --- M7: аутентификация — JWT RS256 + refresh (§5.1) ---
+	// Ключи ТОЛЬКО из файлов (Docker secrets, CLAUDE.md §4.9).
+	privKey, pubKey, err := auth.LoadKeys(
+		cfg.Auth.JWTPrivateKeyPath, cfg.Auth.JWTPublicKeyPath)
+	if err != nil {
+		return err
+	}
+	issuer := auth.NewIssuer(privKey, time.Duration(cfg.Auth.AccessTokenTTL)*time.Second)
+	// Контракт M7 наружу: M8 оборачивает защищённые роуты в
+	// auth.Middleware(auth.NewVerifier(pubKey)), M9 зовёт VerifyWSProtocol.
+	// До M8 pubKey нужен только на старте — валидация пары ключей.
+	_ = pubKey
+	handlers.NewAuth(handlers.AuthDeps{
+		Managers:   managers,
+		Tokens:     refreshTokens,
+		Issuer:     issuer,
+		RefreshTTL: time.Duration(cfg.Auth.RefreshTokenTTL) * time.Second,
+		Log:        log,
+	}).Register(router)
+	log.Info("auth endpoints registered",
+		"access_ttl_sec", cfg.Auth.AccessTokenTTL, "refresh_ttl_sec", cfg.Auth.RefreshTokenTTL)
 
 	// --- M6: платёжный вебхук CryptoBot (§3.3, §5.5) ---
 	handlers.NewPaymentWebhook(handlers.PaymentWebhookDeps{

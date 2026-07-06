@@ -110,10 +110,10 @@ type KanbanConfig struct {
 // mainnet (боевой). HMAC-ключ вебхука производный от активного токена
 // (SHA256(token), спецификация Crypto Pay) — см. internal/payment.
 type PaymentConfig struct {
-	Gateway             string `mapstructure:"gateway"`       // всегда "cryptobot"
-	TestnetToken        string `mapstructure:"testnet_token"` // CRYPTOBOT_TESTNET_TOKEN
-	MainnetToken        string `mapstructure:"mainnet_token"` // CRYPTOBOT_MAINNET_TOKEN
-	UseTestnet          bool   `mapstructure:"use_testnet"`   // CRYPTOBOT_USE_TESTNET
+	Gateway             string `mapstructure:"gateway"`               // всегда "cryptobot"
+	TestnetToken        string `mapstructure:"testnet_token"`         // CRYPTOBOT_TESTNET_TOKEN
+	MainnetToken        string `mapstructure:"mainnet_token"`         // CRYPTOBOT_MAINNET_TOKEN
+	UseTestnet          bool   `mapstructure:"use_testnet"`           // CRYPTOBOT_USE_TESTNET
 	ReplayWindowMinutes int    `mapstructure:"replay_window_minutes"` // §5.5: окно ±5 мин
 }
 
@@ -170,6 +170,10 @@ var requiredEnv = []string{
 	// всплыл бы только при переключении use_testnet в бою.
 	"CRYPTOBOT_TESTNET_TOKEN",
 	"CRYPTOBOT_MAINNET_TOKEN",
+	// M7 (auth): пути к RSA-паре RS256 (Docker secrets, CLAUDE.md §4.9) —
+	// без ключей /auth/login не подпишет ни одного токена.
+	"JWT_PRIVATE_KEY_PATH",
+	"JWT_PUBLIC_KEY_PATH",
 }
 
 // defaultEnv — значения для незаданных НЕобязательных переменных.
@@ -319,6 +323,24 @@ func (c *Config) validate() error {
 				"rag.cosine_threshold вне (0,1): %v", r.CosineThreshold))
 		} else if r.TopK <= 0 {
 			problems = append(problems, fmt.Sprintf("rag.top_k должен быть > 0: %d", r.TopK))
+		}
+	}
+
+	// M7: auth-секция проверяется, когда задан хотя бы один путь к ключу
+	// (юнит-тестовые yaml без auth-секции валидны — токены там не выпускаются).
+	if a := c.Auth; a.JWTPrivateKeyPath != "" || a.JWTPublicKeyPath != "" {
+		switch {
+		case a.JWTPrivateKeyPath == "" || a.JWTPublicKeyPath == "":
+			problems = append(problems,
+				"auth: jwt_private_key_path и jwt_public_key_path задаются только вместе (§5.1)")
+		case a.AccessTokenTTL <= 0:
+			problems = append(problems, fmt.Sprintf(
+				"auth.access_token_ttl должен быть > 0 секунд: %d (§5.1)", a.AccessTokenTTL))
+		case a.RefreshTokenTTL <= a.AccessTokenTTL:
+			// Refresh короче access бессмыслен: сессия рвалась бы раньше токена.
+			problems = append(problems, fmt.Sprintf(
+				"auth.refresh_token_ttl (%d) должен быть больше access_token_ttl (%d) (§5.1)",
+				a.RefreshTokenTTL, a.AccessTokenTTL))
 		}
 	}
 
