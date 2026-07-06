@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/hibiken/asynq"
+	"github.com/redis/go-redis/v9"
 
 	"github.com/interfin/interfin-ai-crm/internal/config"
 )
@@ -53,6 +54,9 @@ func TestEnqueueInbound_DuplicateGivesOneTask(t *testing.T) {
 		!errors.Is(err, asynq.ErrQueueNotFound) {
 		t.Logf("очистка очереди перед тестом: %v", err)
 	}
+	// DeleteTask НЕ снимает unique-замки (TTL 1 час): без зачистки повторный
+	// прогон в течение часа получал бы ErrDuplicate на первом же enqueue.
+	cleanUniqueLocks(t, addr)
 
 	c := NewClient(config.RedisConfig{Addr: addr})
 	defer c.Close()
@@ -98,5 +102,25 @@ func TestEnqueueInbound_DuplicateGivesOneTask(t *testing.T) {
 	// Прибираем за собой.
 	if _, err := inspector.DeleteAllPendingTasks("default"); err != nil {
 		t.Logf("очистка после теста: %v", err)
+	}
+	cleanUniqueLocks(t, addr)
+}
+
+// cleanUniqueLocks удаляет unique-замки asynq: инспектор их не трогает,
+// а живут они uniqueTTL (1 час), переживая любые Delete*Tasks.
+func cleanUniqueLocks(t *testing.T, addr string) {
+	t.Helper()
+	rdb := redis.NewClient(&redis.Options{Addr: addr})
+	defer rdb.Close()
+	ctx := context.Background()
+	keys, err := rdb.Keys(ctx, "asynq:{default}:unique:*").Result()
+	if err != nil {
+		t.Logf("поиск unique-замков: %v", err)
+		return
+	}
+	if len(keys) > 0 {
+		if err := rdb.Del(ctx, keys...).Err(); err != nil {
+			t.Logf("зачистка unique-замков: %v", err)
+		}
 	}
 }

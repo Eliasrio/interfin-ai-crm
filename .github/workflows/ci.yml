@@ -71,4 +71,7 @@ jobs:
         run: go run ./cmd/migrate up
 
       - name: Tests
-        run: go test ./...
+        # -p 1: интеграционные тесты пакетов (queue, worker, repo, db) делят
+        # один Redis/Postgres; параллельные пакеты воруют друг у друга задачи
+        # из очереди default и строки из TRUNCATE-таблиц.
+        run: go test -p 1 ./...

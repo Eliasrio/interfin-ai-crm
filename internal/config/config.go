@@ -39,6 +39,9 @@ type TelegramConfig struct {
 	BotToken      string `mapstructure:"bot_token"`
 	WebhookSecret string `mapstructure:"webhook_secret"`
 	WebhookURL    string `mapstructure:"webhook_url"`
+	// ManagerChatID — чат для алертов dead letter (§6.3). Опционален:
+	// 0 = алерты остаются только в логе.
+	ManagerChatID int64 `mapstructure:"manager_chat_id"`
 }
 
 type DatabaseConfig struct {
@@ -130,6 +133,8 @@ var requiredEnv = []string{
 	"TELEGRAM_BOT_TOKEN",
 	"TELEGRAM_WEBHOOK_SECRET",
 	"TELEGRAM_WEBHOOK_URL",
+	// M3 (воркер + Claude): без ключа воркер не может звать /v1/messages.
+	"ANTHROPIC_API_KEY",
 }
 
 // defaultEnv — значения для незаданных НЕобязательных переменных.
@@ -234,6 +239,25 @@ func (c *Config) validate() error {
 		(tg.BotToken == "" || tg.WebhookSecret == "" || tg.WebhookURL == "") {
 		problems = append(problems,
 			"telegram: bot_token, webhook_secret и webhook_url задаются только вместе (§5.4, §6.1)")
+	}
+
+	// M3: claude-секция проверяется, когда задан api_key (в юнит-тестовых
+	// yaml без ключа секция может быть частичной — воркер там не собирается).
+	if cl := c.Claude; cl.APIKey != "" {
+		b := cl.TokenBudget
+		switch {
+		case cl.Model == "":
+			problems = append(problems, "claude.model пуст")
+		case cl.ClaudeReplyTokens <= 0:
+			problems = append(problems, "claude.claude_reply_tokens должен быть > 0 (§7.2)")
+		case b.SystemPrompt <= 0 || b.History <= 0 || b.Summary < 0 || b.SafetyBuffer < 0:
+			problems = append(problems, "claude.token_budget: компоненты бюджета невалидны (§7.2)")
+		case b.SystemPrompt+b.Summary+b.History+b.SafetyBuffer+cl.ClaudeReplyTokens > 9000:
+			// IQ-6: запрос к Claude никогда не превышает 9000 токенов.
+			problems = append(problems, "claude: бюджет + claude_reply_tokens превышают 9000 (IQ-6)")
+		case cl.CountTokensThreshold <= 0:
+			problems = append(problems, "claude.count_tokens_threshold должен быть > 0 (AQ²-fix #7)")
+		}
 	}
 
 	if len(problems) > 0 {

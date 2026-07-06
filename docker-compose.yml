@@ -60,6 +60,9 @@ services:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:-}
       TELEGRAM_WEBHOOK_URL: ${TELEGRAM_WEBHOOK_URL:-}
+      # M3: воркер + Claude (ключ обязателен, chat_id алертов — нет)
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      TELEGRAM_MANAGER_CHAT_ID: ${TELEGRAM_MANAGER_CHAT_ID:-}
     depends_on:
       postgres:
         condition: service_healthy

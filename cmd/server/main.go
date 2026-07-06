@@ -21,6 +21,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
 
+	"github.com/interfin/interfin-ai-crm/internal/claude"
 	"github.com/interfin/interfin-ai-crm/internal/config"
 	"github.com/interfin/interfin-ai-crm/internal/db"
 	"github.com/interfin/interfin-ai-crm/internal/handlers"
@@ -28,6 +29,7 @@ import (
 	"github.com/interfin/interfin-ai-crm/internal/repo"
 	"github.com/interfin/interfin-ai-crm/internal/server"
 	"github.com/interfin/interfin-ai-crm/internal/telegram"
+	"github.com/interfin/interfin-ai-crm/internal/worker"
 )
 
 // redisPinger адаптирует redis.UniversalClient к server.Pinger.
@@ -116,6 +118,31 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+
+	// --- M3: Asynq-воркер process:inbound (пайплайн §6.2, Claude §7) ---
+	ai, err := claude.New(cfg.Claude)
+	if err != nil {
+		return err
+	}
+	budgeter, err := worker.NewBudgeter(cfg.Claude, ai)
+	if err != nil {
+		return err
+	}
+	sender := worker.NewTelebotSender(bot)
+	wrk := worker.New(
+		cfg.Redis,
+		worker.NewProcessor(leads, msgs, budgeter, ai, sender, log),
+		sender,
+		cfg.Telegram.ManagerChatID,
+		log,
+	)
+	if err := wrk.Start(); err != nil {
+		return err
+	}
+	// Останавливаем воркер до закрытия БД/Redis: Shutdown дожидается
+	// активных задач, которым эти соединения ещё нужны.
+	defer wrk.Shutdown()
+	log.Info("asynq worker started", "task", queue.TypeProcessInbound)
 	// Регистрация webhook при старте (задача M2 §6). Не прошла — не стартуем:
 	// без webhook приложение молча не получало бы ни одного апдейта.
 	if err := telegram.RegisterWebhook(bot); err != nil {

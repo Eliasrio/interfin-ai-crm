@@ -57,7 +57,7 @@ M0 Скелет ──▶ M1 Данные ──┬──▶ M2 Ingestion ──
 | Embeddings | **Voyage AI** voyage-3 (НЕ OpenAI) |
 | Очереди | Redis 7 + Asynq v0.24 |
 | Миграции | golang-migrate v4 |
-| AI | Claude 3.5 Sonnet (`claude-3-5-sonnet-20241022`) |
+| AI | Claude Sonnet 5 (`claude-sonnet-5`) — замена: SRS-модель `claude-3-5-sonnet-20241022` отключена Anthropic 28.10.2025, API отдаёт 404 (зафиксировано в M3). В клиенте thinking выключен явно — иначе на Sonnet 5 он включён по умолчанию и ест бюджет ответа §7.2 |
 | Frontend | React 18 + gorilla/websocket |
 | Auth | JWT RS256 + Refresh Token |
 | Deploy | Docker Compose (dev) / Swarm (prod) |

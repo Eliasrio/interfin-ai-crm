@@ -9,6 +9,7 @@ telegram:
   bot_token: ${TELEGRAM_BOT_TOKEN}
   webhook_secret: ${TELEGRAM_WEBHOOK_SECRET}
   webhook_url: ${TELEGRAM_WEBHOOK_URL}
+  manager_chat_id: ${TELEGRAM_MANAGER_CHAT_ID} # опционально: алерты dead letter (§6.3)
 
 database:
   dsn: ${POSTGRES_DSN}
@@ -30,7 +31,10 @@ auth:
 
 claude:
   api_key: ${ANTHROPIC_API_KEY}
-  model: claude-3-5-sonnet-20241022
+  # SRS задавал claude-3-5-sonnet-20241022; модель отключена Anthropic
+  # 2025-10-28 (API отвечает 404 not_found_error). Официальная drop-in
+  # замена того же класса — claude-sonnet-5 (см. CLAUDE.md §3).
+  model: claude-sonnet-5
   claude_reply_tokens: 1000
   token_budget:
     system_prompt: 2000
