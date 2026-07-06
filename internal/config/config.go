@@ -121,10 +121,15 @@ type MonitoringConfig struct {
 }
 
 // requiredEnv — переменные, без которых процесс не имеет права стартовать.
-// Список расширяется по мере эпиков (M2 добавит TELEGRAM_BOT_TOKEN и т.д.).
+// Список расширяется по мере эпиков.
 var requiredEnv = []string{
 	"POSTGRES_DSN",
 	"REDIS_ADDR",
+	// M2 (Telegram ingestion): без токена бот не создаётся, без секрета
+	// webhook отвечал бы 403 всем (§5.4), без URL некуда делать setWebhook.
+	"TELEGRAM_BOT_TOKEN",
+	"TELEGRAM_WEBHOOK_SECRET",
+	"TELEGRAM_WEBHOOK_URL",
 }
 
 // defaultEnv — значения для незаданных НЕобязательных переменных.
@@ -220,6 +225,15 @@ func (c *Config) validate() error {
 	}
 	if c.Database.QueryExecMode != "simple" {
 		problems = append(problems, "database.query_exec_mode должен быть \"simple\" (AQ²-fix #3)")
+	}
+	// M2: telegram-секция либо не заполнена вовсе (yaml без неё — например,
+	// в юнит-тестах), либо заполнена целиком: частичная конфигурация — это
+	// бот без секрета или без URL, оба варианта небезопасны/неработоспособны.
+	tg := c.Telegram
+	if (tg.BotToken != "" || tg.WebhookSecret != "" || tg.WebhookURL != "") &&
+		(tg.BotToken == "" || tg.WebhookSecret == "" || tg.WebhookURL == "") {
+		problems = append(problems,
+			"telegram: bot_token, webhook_secret и webhook_url задаются только вместе (§5.4, §6.1)")
 	}
 
 	if len(problems) > 0 {

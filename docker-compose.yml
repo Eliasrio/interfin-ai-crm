@@ -55,6 +55,11 @@ services:
       HTTP_PORT: "8080"
       POSTGRES_DSN: postgres://postgres:postgres@postgres:5432/interfin?sslmode=disable
       REDIS_ADDR: redis:6379
+      # M2: значения берутся из .env (см. .env.example и README «Telegram
+      # webhook локально»). Секреты в compose-файл не вписывать (CLAUDE.md §4.9).
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:-}
+      TELEGRAM_WEBHOOK_URL: ${TELEGRAM_WEBHOOK_URL:-}
     depends_on:
       postgres:
         condition: service_healthy

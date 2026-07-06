@@ -69,6 +69,52 @@ POSTGRES_TEST_DSN=postgres://postgres:postgres@localhost:5432/interfin?sslmode=d
 
 Матрица «поле ↔ таблица ↔ где используется» — `docs/field_schema_matrix.md`.
 
+## Telegram webhook локально (M2, ngrok — SRS §13.1)
+
+Telegram доставляет апдейты только на публичный HTTPS-URL, поэтому для
+локальной разработки нужен туннель (в dev-матрице окружений это ngrok):
+
+```bash
+# 1. Зависимости и схема
+docker compose up -d postgres redis
+export POSTGRES_DSN='postgres://postgres:postgres@localhost:5432/interfin?sslmode=disable'
+go run ./cmd/migrate up
+
+# 2. Туннель на порт приложения
+ngrok http 8080
+# скопируй выданный https-адрес, например https://a1b2c3.ngrok-free.app
+
+# 3. Окружение (или заполни .env по .env.example)
+export REDIS_ADDR=localhost:6379
+export TELEGRAM_BOT_TOKEN='<токен от @BotFather>'
+export TELEGRAM_WEBHOOK_SECRET="$(openssl rand -hex 32)"
+export TELEGRAM_WEBHOOK_URL='https://a1b2c3.ngrok-free.app/webhook/telegram'
+
+# 4. Старт: сервер сам зарегистрирует webhook (setWebhook) при запуске
+go run ./cmd/server
+```
+
+Проверка: напиши боту в Telegram — в логе появится `webhook: создан новый
+лид`, сообщение окажется в таблице `messages` (`direction='inbound'`),
+а задача `process:inbound` — в очереди Asynq (обрабатывать её начнёт
+воркер M3). Ответа от бота на этом этапе НЕТ — это по плану.
+
+Важно:
+- URL в `TELEGRAM_WEBHOOK_URL` — полный, вплоть до `/webhook/telegram`.
+- Каждый перезапуск ngrok меняет адрес — обнови переменную и перезапусти
+  сервер (он перерегистрирует webhook).
+- Запросы без валидного `X-Telegram-Bot-Api-Secret-Token` получают 403 —
+  секрет обязателен, «открытого» webhook в проекте нет (§5.4).
+- Polling запрещён (CLAUDE.md §4.10): бот работает только через webhook,
+  проверить текущую регистрацию можно методом Bot API `getWebhookInfo`.
+
+Интеграционный тест дедупликации очереди (AQ²-6) гоняется при заданном
+`REDIS_TEST_ADDR` (без него — skip):
+
+```bash
+REDIS_TEST_ADDR=localhost:6379 go test ./internal/queue
+```
+
 ## Про критерии приёмки
 
 Метки `IQ-N` / `AQ²-N` в критериях ссылаются на review-историю ТЗ (баги,

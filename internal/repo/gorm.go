@@ -92,7 +92,7 @@ func (r *messageRepo) CreateInbound(ctx context.Context, msg *models.Message) er
 		res := tx.Model(&models.Lead{}).
 			Where("id = ?", msg.LeadID).
 			Updates(map[string]interface{}{
-				"message_count":    gorm.Expr("message_count + 1"),  // только inbound (CLAUDE.md §4.3)
+				"message_count":    gorm.Expr("message_count + 1"),   // только inbound (CLAUDE.md §4.3)
 				"anti_spam_count":  gorm.Expr("anti_spam_count + 1"), // per-stage, сброс в M5
 				"last_activity_at": gorm.Expr("NOW()"),               // от него считается TTL (CLAUDE.md §4.7)
 			})

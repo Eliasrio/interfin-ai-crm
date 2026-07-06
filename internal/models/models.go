@@ -87,10 +87,10 @@ func (Message) TableName() string { return "messages" }
 // PaymentEvent — §8.3. НЕ удаляется при LGPD erasure:
 // фискальная retention 5 лет (AQ²-fix #4, CLAUDE.md §4.8).
 type PaymentEvent struct {
-	ID             int64           `gorm:"column:id;primaryKey"`
-	LeadID         int64           `gorm:"column:lead_id"`
-	Gateway        *string         `gorm:"column:gateway"`
-	Status         *string         `gorm:"column:status"`
+	ID             int64               `gorm:"column:id;primaryKey"`
+	LeadID         int64               `gorm:"column:lead_id"`
+	Gateway        *string             `gorm:"column:gateway"`
+	Status         *string             `gorm:"column:status"`
 	AmountDue      decimal.NullDecimal `gorm:"column:amount_due"` // NUMERIC(20,8): decimal, не float — крипто-суммы
 	AmountReceived decimal.NullDecimal `gorm:"column:amount_received"`
 	NetReceived    decimal.NullDecimal `gorm:"column:net_received"`

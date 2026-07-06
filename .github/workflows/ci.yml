@@ -26,11 +26,23 @@ jobs:
           --health-timeout 3s
           --health-retries 10
 
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
     env:
       POSTGRES_DSN: postgres://postgres:postgres@localhost:5432/interfin?sslmode=disable
-      # Без этой переменной интеграционные тесты repo/db делают t.Skip —
-      # в CI они обязаны гоняться по-настоящему.
+      # Без этих переменных интеграционные тесты (repo/db — Postgres,
+      # queue — Redis/дедуп AQ²-6) делают t.Skip — в CI они обязаны
+      # гоняться по-настоящему.
       POSTGRES_TEST_DSN: postgres://postgres:postgres@localhost:5432/interfin?sslmode=disable
+      REDIS_TEST_ADDR: localhost:6379
 
     steps:
       - uses: actions/checkout@v4
