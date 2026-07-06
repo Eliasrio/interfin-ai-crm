@@ -63,6 +63,12 @@ services:
       # M3: воркер + Claude (ключ обязателен, chat_id алертов — нет)
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       TELEGRAM_MANAGER_CHAT_ID: ${TELEGRAM_MANAGER_CHAT_ID:-}
+      # M4: RAG-эмбеддинги Voyage (обязательная)
+      VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
+      # M6: крипто-шлюз CryptoBot; сеть по умолчанию testnet (безопасный дефолт)
+      CRYPTOBOT_TESTNET_TOKEN: ${CRYPTOBOT_TESTNET_TOKEN:-}
+      CRYPTOBOT_MAINNET_TOKEN: ${CRYPTOBOT_MAINNET_TOKEN:-}
+      CRYPTOBOT_USE_TESTNET: ${CRYPTOBOT_USE_TESTNET:-true}
     depends_on:
       postgres:
         condition: service_healthy

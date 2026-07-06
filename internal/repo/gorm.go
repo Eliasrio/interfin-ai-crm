@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/interfin/interfin-ai-crm/internal/models"
 )
@@ -167,8 +168,14 @@ func (r *messageRepo) ListByLead(ctx context.Context, leadID int64, limit int) (
 
 type paymentRepo struct{ db *gorm.DB }
 
+// Create идемпотентен по (gateway, raw_payload->>'update_id') — уникальный
+// индекс 0008: ретрай платёжного вебхука (nonce возвращён после провала
+// перехода, M6) не плодит вторую фискальную запись. Повтор = no-op без ошибки.
 func (r *paymentRepo) Create(ctx context.Context, ev *models.PaymentEvent) error {
-	if err := r.db.WithContext(ctx).Create(ev).Error; err != nil {
+	err := r.db.WithContext(ctx).
+		Clauses(clause.OnConflict{DoNothing: true}).
+		Create(ev).Error
+	if err != nil {
 		return fmt.Errorf("repo: create payment event: %w", err)
 	}
 	return nil

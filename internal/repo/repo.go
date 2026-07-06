@@ -57,7 +57,9 @@ type MessageRepo interface {
 
 // PaymentRepo — payment_events (§8.3).
 type PaymentRepo interface {
-	// Create вставляет событие платёжного gateway.
+	// Create вставляет событие платёжного gateway. Идемпотентен по
+	// (gateway, raw_payload->>'update_id') — повтор вебхука не плодит
+	// вторую фискальную запись (индекс 0008, M6).
 	Create(ctx context.Context, ev *models.PaymentEvent) error
 	// ListByLead — все события лида, от старых к новым.
 	ListByLead(ctx context.Context, leadID int64) ([]models.PaymentEvent, error)

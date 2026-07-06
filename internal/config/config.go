@@ -26,6 +26,7 @@ type Config struct {
 	Embeddings EmbeddingsConfig `mapstructure:"embeddings"`
 	AWS        AWSConfig        `mapstructure:"aws"`
 	Kanban     KanbanConfig     `mapstructure:"kanban"`
+	Payment    PaymentConfig    `mapstructure:"payment"`
 	RAG        RAGConfig        `mapstructure:"rag"`
 	LGPD       LGPDConfig       `mapstructure:"lgpd"`
 	Monitoring MonitoringConfig `mapstructure:"monitoring"`
@@ -104,6 +105,33 @@ type KanbanConfig struct {
 	SummaryEveryNMessages int     `mapstructure:"summary_every_n_messages"`
 }
 
+// PaymentConfig — крипто-шлюз CryptoBot / Crypto Pay API (M6, §3.3/§5.5).
+// Сеть переключается use_testnet: true — testnet (разработка), false —
+// mainnet (боевой). HMAC-ключ вебхука производный от активного токена
+// (SHA256(token), спецификация Crypto Pay) — см. internal/payment.
+type PaymentConfig struct {
+	Gateway             string `mapstructure:"gateway"`       // всегда "cryptobot"
+	TestnetToken        string `mapstructure:"testnet_token"` // CRYPTOBOT_TESTNET_TOKEN
+	MainnetToken        string `mapstructure:"mainnet_token"` // CRYPTOBOT_MAINNET_TOKEN
+	UseTestnet          bool   `mapstructure:"use_testnet"`   // CRYPTOBOT_USE_TESTNET
+	ReplayWindowMinutes int    `mapstructure:"replay_window_minutes"` // §5.5: окно ±5 мин
+}
+
+// ActiveToken — токен приложения выбранной сети; материал HMAC-ключа вебхука
+// и аутентификация Crypto Pay API.
+func (p PaymentConfig) ActiveToken() string {
+	if p.UseTestnet {
+		return p.TestnetToken
+	}
+	return p.MainnetToken
+}
+
+// configured — секция payment заполнена (в юнит-тестовых yaml её может
+// не быть вовсе — платёжный вебхук там не собирается).
+func (p PaymentConfig) configured() bool {
+	return p.Gateway != "" || p.TestnetToken != "" || p.MainnetToken != ""
+}
+
 type RAGConfig struct {
 	CosineThreshold float64 `mapstructure:"cosine_threshold"`
 	TopK            int     `mapstructure:"top_k"`
@@ -137,11 +165,19 @@ var requiredEnv = []string{
 	"ANTHROPIC_API_KEY",
 	// M4 (RAG): эмбеддинги Voyage voyage-3 (AQ²-fix #2 — НЕ OpenAI).
 	"VOYAGE_API_KEY",
+	// M6 (payment): токены CryptoBot обеих сетей — без активного токена
+	// вебхук отвечал бы 403 всем (§5.5), а тихо пустой токен другой сети
+	// всплыл бы только при переключении use_testnet в бою.
+	"CRYPTOBOT_TESTNET_TOKEN",
+	"CRYPTOBOT_MAINNET_TOKEN",
 }
 
 // defaultEnv — значения для незаданных НЕобязательных переменных.
 var defaultEnv = map[string]string{
 	"HTTP_PORT": "8080", // §13.2: healthcheck ходит на :8080
+	// M6: не задан — работаем в testnet; боевой режим включается только
+	// явным CRYPTOBOT_USE_TESTNET=false (безопасный дефолт для dev).
+	"CRYPTOBOT_USE_TESTNET": "true",
 }
 
 var envPlaceholder = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
@@ -283,6 +319,27 @@ func (c *Config) validate() error {
 				"rag.cosine_threshold вне (0,1): %v", r.CosineThreshold))
 		} else if r.TopK <= 0 {
 			problems = append(problems, fmt.Sprintf("rag.top_k должен быть > 0: %d", r.TopK))
+		}
+	}
+
+	// M6: payment-секция проверяется, когда заполнена (юнит-тестовые yaml
+	// без неё валидны — платёжный вебхук там не собирается).
+	if p := c.Payment; p.configured() {
+		switch {
+		case p.Gateway != "cryptobot":
+			problems = append(problems, fmt.Sprintf(
+				"payment.gateway должен быть \"cryptobot\", не %q (M6)", p.Gateway))
+		case p.ActiveToken() == "":
+			problems = append(problems, fmt.Sprintf(
+				"payment: токен активной сети пуст (use_testnet=%v → %s)",
+				p.UseTestnet, map[bool]string{true: "CRYPTOBOT_TESTNET_TOKEN", false: "CRYPTOBOT_MAINNET_TOKEN"}[p.UseTestnet]))
+		case p.ReplayWindowMinutes <= 0:
+			problems = append(problems, "payment.replay_window_minutes должен быть > 0 (§5.5)")
+		}
+		// §3.3: tolerance читается из конфига (задача M6), 0 или 100+ — бессмыслица.
+		if pct := c.Kanban.UnderpaidTolerancePct; pct <= 0 || pct >= 100 {
+			problems = append(problems, fmt.Sprintf(
+				"kanban.underpaid_tolerance_pct вне (0,100): %v (§3.3)", pct))
 		}
 	}
 

@@ -153,6 +153,96 @@ telegram:
 	}
 }
 
+// --- M6: payment (CryptoBot) ---
+
+const paymentYAML = testYAML + `
+kanban:
+  underpaid_tolerance_pct: 2.0
+payment:
+  gateway: cryptobot
+  use_testnet: ${CRYPTOBOT_USE_TESTNET}
+  testnet_token: ${CRYPTOBOT_TESTNET_TOKEN}
+  mainnet_token: ${CRYPTOBOT_MAINNET_TOKEN}
+  replay_window_minutes: 5
+`
+
+func setPaymentEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("POSTGRES_DSN", "postgres://u:p@localhost:5432/db")
+	t.Setenv("REDIS_ADDR", "localhost:6379")
+	t.Setenv("CRYPTOBOT_TESTNET_TOKEN", "111:testnet")
+	t.Setenv("CRYPTOBOT_MAINNET_TOKEN", "222:mainnet")
+}
+
+func TestLoad_PaymentEnvRequired(t *testing.T) {
+	t.Setenv("POSTGRES_DSN", "postgres://u:p@localhost:5432/db")
+	t.Setenv("REDIS_ADDR", "localhost:6379")
+	os.Unsetenv("CRYPTOBOT_TESTNET_TOKEN")
+	os.Unsetenv("CRYPTOBOT_MAINNET_TOKEN")
+
+	_, err := Load(writeTempConfig(t, paymentYAML))
+	if err == nil {
+		t.Fatal("Load должен требовать CRYPTOBOT_* токены для конфига с payment-секцией")
+	}
+	for _, name := range []string{"CRYPTOBOT_TESTNET_TOKEN", "CRYPTOBOT_MAINNET_TOKEN"} {
+		if !strings.Contains(err.Error(), name) {
+			t.Errorf("ошибка должна называть %s, получили: %v", name, err)
+		}
+	}
+}
+
+func TestLoad_PaymentTestnetDefault(t *testing.T) {
+	// CRYPTOBOT_USE_TESTNET не задан → безопасный дефолт true (testnet):
+	// боевой режим включается только явным false.
+	setPaymentEnv(t)
+	os.Unsetenv("CRYPTOBOT_USE_TESTNET")
+
+	cfg, err := Load(writeTempConfig(t, paymentYAML))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.Payment.UseTestnet {
+		t.Error("незаданный CRYPTOBOT_USE_TESTNET должен давать testnet (безопасный дефолт)")
+	}
+	if cfg.Payment.ActiveToken() != "111:testnet" {
+		t.Errorf("ActiveToken = %q, ожидали testnet-токен", cfg.Payment.ActiveToken())
+	}
+}
+
+func TestLoad_PaymentMainnetSwitch(t *testing.T) {
+	setPaymentEnv(t)
+	t.Setenv("CRYPTOBOT_USE_TESTNET", "false")
+
+	cfg, err := Load(writeTempConfig(t, paymentYAML))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Payment.UseTestnet {
+		t.Error("CRYPTOBOT_USE_TESTNET=false должен включать mainnet")
+	}
+	if cfg.Payment.ActiveToken() != "222:mainnet" {
+		t.Errorf("ActiveToken = %q, ожидали mainnet-токен", cfg.Payment.ActiveToken())
+	}
+}
+
+func TestLoad_PaymentBadTolerance(t *testing.T) {
+	// §3.3: tolerance из конфига; 0 и 100+ — ошибки конфигурации.
+	setPaymentEnv(t)
+	bad := strings.Replace(paymentYAML, "underpaid_tolerance_pct: 2.0",
+		"underpaid_tolerance_pct: 0", 1)
+	if _, err := Load(writeTempConfig(t, bad)); err == nil {
+		t.Fatal("нулевой underpaid_tolerance_pct при настроенном payment должен отвергаться")
+	}
+}
+
+func TestLoad_PaymentWrongGateway(t *testing.T) {
+	setPaymentEnv(t)
+	bad := strings.Replace(paymentYAML, "gateway: cryptobot", "gateway: stripe", 1)
+	if _, err := Load(writeTempConfig(t, bad)); err == nil {
+		t.Fatal("незнакомый payment.gateway должен отвергаться")
+	}
+}
+
 func TestLoad_RejectsPreparedStatements(t *testing.T) {
 	// AQ²-fix #3: prepare_stmt=true — это баг конфигурации, ловим на старте.
 	t.Setenv("POSTGRES_DSN", "postgres://u:p@localhost:5432/db")

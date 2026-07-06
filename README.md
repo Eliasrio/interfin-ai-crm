@@ -115,6 +115,30 @@ go run ./cmd/server
 REDIS_TEST_ADDR=localhost:6379 go test ./internal/queue
 ```
 
+## Платёжный вебхук CryptoBot локально (M6, §3.3/§5.5)
+
+Шлюз — Crypto Pay API от @CryptoBot. Сеть выбирает `CRYPTOBOT_USE_TESTNET`:
+`true` — testnet (@CryptoTestnetBot, разработка), `false` — mainnet (боевой).
+Токен и base URL API переключаются вместе (`internal/payment`).
+
+Реальный поток: инвойс создаётся через `payment.Client.CreateInvoice`
+(в `payload` кладётся `lead_id` — по нему вебхук связывает оплату с лидом),
+лид оплачивает его в Crypto Bot, шлюз шлёт `invoice_paid` на
+`POST /webhook/payment`. Дальше автоматика §3.3: `net_received ≥ 98%` →
+Stage 3, недоплата → `manual_resolution` + Stage 4 (TTL 48ч).
+
+Эмуляция вебхука без шлюза (подпись — HMAC-SHA256 тела ключом
+SHA256(активный токен), заголовок `Crypto-Pay-Api-Signature`):
+
+```bash
+BODY='{"update_id":1,"update_type":"invoice_paid","request_date":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","payload":{"invoice_id":1,"status":"paid","asset":"USDT","amount":"100","fee_asset":"USDT","fee_amount":1,"payload":"<LEAD_ID>"}}'
+SIG=$(python3 -c "import hashlib,hmac,os,sys; token=os.environ['CRYPTOBOT_TESTNET_TOKEN'].encode(); print(hmac.new(hashlib.sha256(token).digest(), sys.argv[1].encode(), hashlib.sha256).hexdigest())" "$BODY")
+curl -s -X POST localhost:8080/webhook/payment -H "Crypto-Pay-Api-Signature: $SIG" -d "$BODY"
+```
+
+Повтор того же `update_id` в течение 10 минут → 403 (replay-защита §5.5);
+`request_date` старше ±5 минут → 403.
+
 ## Про критерии приёмки
 
 Метки `IQ-N` / `AQ²-N` в критериях ссылаются на review-историю ТЗ (баги,

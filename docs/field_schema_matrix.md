@@ -11,6 +11,7 @@ Living reference: какие «особые» поля где живут и кт
 | `ttl_task_id` | `leads` | `0003_leads` | `models.Lead.TTLTaskID` | §3.4, §6.4 TTL (reset = DeleteTask + enqueue, M5) |
 | `anti_spam_count` | `leads` | `0003_leads` | `models.Lead.AntiSpamCount` | §3.2, §3.5 (per-stage inbound, сброс при смене стадии, M5) |
 | `tolerance_ok` | `payment_events` | `0005_payment_events` | `models.PaymentEvent.ToleranceOk` | §3.3 USDT (underpaid ≤ 2%, M6) |
+| `manual_resolution` | `leads` | `0003_leads` | `models.Lead.ManualResolution` | §3.3 (недоплата сверх tolerance → ручной разбор, M6) |
 | `consent_given_at` | `leads` | `0003_leads` | `models.Lead.ConsentGivenAt` | §9 LGPD (согласие при первом inbound, M2) |
 
 Смежные инварианты (CLAUDE.md §4):

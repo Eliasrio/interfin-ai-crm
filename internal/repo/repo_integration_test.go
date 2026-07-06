@@ -150,6 +150,47 @@ func TestPaymentEvents(t *testing.T) {
 	}
 }
 
+// TestPaymentEventsDedup — M6: ретрай платёжного вебхука с тем же update_id
+// не плодит вторую фискальную запись (уникальный индекс 0008 +
+// ON CONFLICT DO NOTHING в Create), а платёж другого шлюза с совпадающим
+// update_id — не задевает.
+func TestPaymentEventsDedup(t *testing.T) {
+	leads, _, pays := testRepos(t)
+	ctx := context.Background()
+
+	lead := &models.Lead{TelegramUserID: 666}
+	if err := leads.Create(ctx, lead); err != nil {
+		t.Fatal(err)
+	}
+
+	gw, cur := "cryptobot", "USDT"
+	mk := func(gateway string) *models.PaymentEvent {
+		return &models.PaymentEvent{
+			LeadID: lead.ID, Gateway: &gateway, Currency: &cur,
+			RawPayload: models.JSONB(`{"update_id": 42, "update_type": "invoice_paid"}`),
+		}
+	}
+	if err := pays.Create(ctx, mk(gw)); err != nil {
+		t.Fatal(err)
+	}
+	// Повтор того же update_id того же шлюза — no-op без ошибки.
+	if err := pays.Create(ctx, mk(gw)); err != nil {
+		t.Fatalf("повторная вставка должна быть no-op, получили: %v", err)
+	}
+	// Тот же update_id ДРУГОГО шлюза — самостоятельная запись.
+	if err := pays.Create(ctx, mk("otherpay")); err != nil {
+		t.Fatal(err)
+	}
+
+	evs, err := pays.ListByLead(ctx, lead.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evs) != 2 {
+		t.Fatalf("ожидали 2 записи (дубль отсеян, чужой шлюз прошёл), получили %d", len(evs))
+	}
+}
+
 // TestTransitionStage — CAS-переход M5 против реального Postgres:
 // guard по from (приоритет §3.1), атомарный сброс anti_spam_count (§3.5)
 // и обновление last_activity_at — точки отсчёта TTL (CLAUDE.md §4.7).

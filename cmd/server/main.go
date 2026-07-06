@@ -28,6 +28,7 @@ import (
 	"github.com/interfin/interfin-ai-crm/internal/events"
 	"github.com/interfin/interfin-ai-crm/internal/handlers"
 	"github.com/interfin/interfin-ai-crm/internal/kanban"
+	"github.com/interfin/interfin-ai-crm/internal/payment"
 	"github.com/interfin/interfin-ai-crm/internal/queue"
 	"github.com/interfin/interfin-ai-crm/internal/rag"
 	"github.com/interfin/interfin-ai-crm/internal/repo"
@@ -87,7 +88,7 @@ func run(log *slog.Logger) error {
 		}
 	}()
 
-	leads, msgs, _ := repo.New(gormDB)
+	leads, msgs, payments := repo.New(gormDB)
 	knowledge, summaries, ragAudit := repo.NewRAG(gormDB)
 
 	// --- Redis: одиночный (dev) или Sentinel (prod), по конфигу ---
@@ -159,8 +160,9 @@ func run(log *slog.Logger) error {
 			log.Warn("antispam manager close", "error", err)
 		}
 	}()
+	pub := events.NewRedisPublisher(rdb)
 	machine := kanban.NewMachine(leads, msgs, ttlMgr, antiSpamMgr,
-		events.NewRedisPublisher(rdb), sender, cfg.Kanban, log)
+		pub, sender, cfg.Kanban, log)
 
 	wrk := worker.New(
 		cfg.Redis,
@@ -205,6 +207,20 @@ func run(log *slog.Logger) error {
 
 	handlers.NewTelegramWebhook(leads, msgs, q, cfg.Telegram.WebhookSecret, log).
 		Register(router, telegram.NewDispatcher(bot))
+
+	// --- M6: платёжный вебхук CryptoBot (§3.3, §5.5) ---
+	handlers.NewPaymentWebhook(handlers.PaymentWebhookDeps{
+		Leads:        leads,
+		Payments:     payments,
+		Machine:      machine,
+		Nonces:       payment.NewRedisNonceStore(rdb),
+		Pub:          pub,
+		Cfg:          cfg.Payment,
+		TolerancePct: cfg.Kanban.UnderpaidTolerancePct,
+		Log:          log,
+	}).Register(router)
+	log.Info("payment webhook registered",
+		"gateway", cfg.Payment.Gateway, "testnet", cfg.Payment.UseTestnet)
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.Server.Port),

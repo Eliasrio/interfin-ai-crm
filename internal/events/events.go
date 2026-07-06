@@ -28,11 +28,12 @@ import (
 // Channel — канал Redis pub/sub для всех real-time событий CRM (§10.1).
 const Channel = "crm:events"
 
-// Типы событий (M9 + §3.5). payment_received и ttl_warning добавят M6/M9.
+// Типы событий (M9 + §3.5). ttl_warning добавит M9.
 const (
 	TypeStageChange       = "stage_change"
 	TypeAntiSpamAlert     = "antispam_alert"     // §3.5: лимит 25 inbound достигнут
 	TypeManagerEscalation = "manager_escalation" // AQ²-fix #8: 48ч молчания
+	TypePaymentReceived   = "payment_received"   // M6 §3.3: платёж принят; tolerance решил стадию
 )
 
 // Event — единица канала crm:events. Одна структура на все типы:
@@ -48,6 +49,12 @@ type Event struct {
 
 	// Только для antispam_alert:
 	AntiSpamCount int `json:"anti_spam_count,omitempty"`
+
+	// Только для payment_received (M6): net_received строкой — decimal
+	// уходит клиенту без потерь точности float.
+	Amount      string `json:"amount,omitempty"`
+	Currency    string `json:"currency,omitempty"`
+	ToleranceOk *bool  `json:"tolerance_ok,omitempty"`
 
 	Reason string    `json:"reason,omitempty"` // человекочитаемый триггер (лог/отладка)
 	TS     time.Time `json:"ts"`               // клиент хранит как last_event_ts для catch-up §10.3
