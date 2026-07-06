@@ -1,0 +1,62 @@
+# CI (M1): build + vet + тесты + schema-lint (AQ²-1) + обратимость миграций
+# на чистой БД (AQ²-9). Запускается на каждый PR и push в main.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: interfin
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d interfin"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      POSTGRES_DSN: postgres://postgres:postgres@localhost:5432/interfin?sslmode=disable
+      # Без этой переменной интеграционные тесты repo/db делают t.Skip —
+      # в CI они обязаны гоняться по-настоящему.
+      POSTGRES_TEST_DSN: postgres://postgres:postgres@localhost:5432/interfin?sslmode=disable
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.12" # стек пришпилен: CLAUDE.md §3, go.mod
+          cache: true
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: schema-lint (AQ²-1)
+        run: go run ./cmd/schema-lint
+
+      - name: migrate up (чистая БД, AQ²-9)
+        run: go run ./cmd/migrate up
+
+      - name: migrate down all (обратимость, AQ²-9)
+        run: go run ./cmd/migrate down all
+
+      - name: migrate up повторно (после полного down)
+        run: go run ./cmd/migrate up
+
+      - name: Tests
+        run: go test ./...

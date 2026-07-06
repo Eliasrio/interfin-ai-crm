@@ -1,0 +1,2 @@
+DROP TABLE IF EXISTS lgpd_audit;
+DROP TABLE IF EXISTS rag_audit;

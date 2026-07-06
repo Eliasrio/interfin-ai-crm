@@ -57,6 +57,18 @@ M0 ─▶ M1 ─┬─▶ M2 ─▶ M3 ─▶ M4
 - [ ] `go build ./...` и `go vet ./...` чисто.
 - [ ] Изменения в ветке эпика закоммичены.
 
+## Слой данных (M1)
+
+```bash
+docker compose up -d postgres
+go run ./cmd/migrate up          # накатить схему (down 1 / down all — откат)
+go run ./cmd/schema-lint         # модели ↔ миграции (AQ²-1), гоняется в CI
+POSTGRES_TEST_DSN=postgres://postgres:postgres@localhost:5432/interfin?sslmode=disable \
+  go test ./internal/repo        # интеграционные тесты (без DSN — skip)
+```
+
+Матрица «поле ↔ таблица ↔ где используется» — `docs/field_schema_matrix.md`.
+
 ## Про критерии приёмки
 
 Метки `IQ-N` / `AQ²-N` в критериях ссылаются на review-историю ТЗ (баги,

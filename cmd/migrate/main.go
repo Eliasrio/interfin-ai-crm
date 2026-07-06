@@ -4,6 +4,7 @@
 //
 //	go run ./cmd/migrate up          # накатить все миграции
 //	go run ./cmd/migrate down 1      # откатить одну (проверка обратимости)
+//	go run ./cmd/migrate down all    # откатить всё (CI, AQ²-9)
 //	go run ./cmd/migrate version     # текущая версия схемы
 //
 // DSN берётся из POSTGRES_DSN, путь к миграциям — из MIGRATIONS_PATH
@@ -34,7 +35,7 @@ func main() {
 
 func run(log *slog.Logger, args []string) error {
 	if len(args) < 1 {
-		return errors.New("usage: migrate <up|down [n]|version>")
+		return errors.New("usage: migrate <up|down [n|all]|version>")
 	}
 
 	dsn := os.Getenv("POSTGRES_DSN")
@@ -65,6 +66,11 @@ func run(log *slog.Logger, args []string) error {
 	case "up":
 		err = m.Up()
 	case "down":
+		if len(args) > 1 && args[1] == "all" {
+			// Полный откат: CI проверяет обратимость всех миграций (AQ²-9).
+			err = m.Down()
+			break
+		}
 		steps := 1
 		if len(args) > 1 {
 			steps, err = strconv.Atoi(args[1])
