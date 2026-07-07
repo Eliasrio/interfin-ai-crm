@@ -62,6 +62,10 @@ services:
         target: /etc/nginx/nginx.conf
       - source: nginx_crm_conf
         target: /etc/nginx/conf.d/crm.conf
+      # Перекрывает штатную заглушку образа: healthcheck (Host: localhost)
+      # иначе ловил её 404 и Swarm вечно рестартовал контейнер.
+      - source: nginx_default_conf
+        target: /etc/nginx/conf.d/default.conf
     volumes:
       # Let's Encrypt живёт на хосте (certbot renew), см. provisioning.md.
       - /etc/letsencrypt:/etc/letsencrypt:ro
@@ -333,6 +337,8 @@ configs:
     file: ./ops/nginx/nginx.conf
   nginx_crm_conf:
     file: ./ops/nginx/conf.d/crm.conf
+  nginx_default_conf:
+    file: ./ops/nginx/conf.d/default.conf
   pg_primary_conf:
     file: ./ops/postgres/postgresql-primary.conf
   pgbouncer_ini:
