@@ -212,6 +212,16 @@ docker exec \
   -e POSTGRES_DSN='postgres://postgres:<PG_SUPER>@postgres-primary:5432/interfin?sslmode=disable' \
   $(docker ps -qf name=crm_app | head -1) /app/migrate up
 
+# таблицы созданы суперпользователем — выдать права роли crm, включая
+# будущие миграции (иначе первый же INSERT приложения: permission denied,
+# поймано при первом боевом деплое):
+docker exec $(docker ps -qf name=crm_postgres-primary) psql -U postgres -d interfin -c \
+  "GRANT USAGE, CREATE ON SCHEMA public TO crm;
+   GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO crm;
+   GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO crm;
+   ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO crm;
+   ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO crm;"
+
 # app стартовал раньше миграций — перезапустить начисто (rolling, без даунтайма):
 docker service update --force crm_app
 
