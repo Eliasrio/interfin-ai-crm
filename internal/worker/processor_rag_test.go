@@ -171,7 +171,7 @@ func TestHandle_RAGChunksInjected(t *testing.T) {
 	if !strings.Contains(system, "Минимальный депозит") || !strings.Contains(system, "Вывод средств") {
 		t.Errorf("system prompt без RAG-чанков:\n%s", system)
 	}
-	if !strings.Contains(system, "Эй, мама") {
+	if !strings.Contains(system, "Эмма") {
 		t.Error("база system prompt потерялась при инжекте RAG")
 	}
 }
