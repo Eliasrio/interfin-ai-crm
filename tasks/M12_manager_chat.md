@@ -96,3 +96,75 @@
 - [ ] Inbound-сообщения клиента тоже приходят WS-событием `message`
       (чат живой в обе стороны).
 - [ ] `go build ./...`, `go vet ./...`, schema-lint, `npm test` зелёные.
+
+## Как прогнать проверки (полный чек-лист команд)
+
+Окружение (Intel Mac, go/node установлены в ~/sdk — см. память проекта):
+
+```bash
+export PATH=$HOME/sdk/go1.22.12/bin:$HOME/sdk/node-v20.18.1-darwin-x64/bin:$PATH
+export GOTOOLCHAIN=go1.22.12   # без него go.mod уезжает с go 1.22
+cd /Users/amigo/aicrm/interfin-ai-crm
+```
+
+1. Статика и сборка:
+
+```bash
+go build ./... && go vet ./...
+gofmt -l cmd internal            # пусто = ок (урок M6)
+```
+
+2. Миграция 0012 и schema-lint (dev-БД в docker compose):
+
+```bash
+docker compose up -d postgres redis
+export POSTGRES_DSN='postgres://postgres:postgres@localhost:5432/interfin?sslmode=disable'
+go run ./cmd/migrate up          # откат: down 1
+go run ./cmd/schema-lint
+```
+
+3. Юнит- и contract-тесты (без внешних зависимостей — фейки):
+
+```bash
+go test ./internal/handlers ./internal/worker ./internal/events ./internal/payment
+```
+
+4. Интеграционные (Postgres+Redis). Грабли, все ловлены раньше:
+   БД для тестов — **interfin_test** (тесты TRUNCATE-ят таблицы, живой
+   dev-стенд не задевать); контейнер `app` ОСТАНОВИТЬ (крадёт задачи из
+   очереди default); пакеты делят Redis/Postgres → `-p 1`; asynq
+   unique-замки не снимаются DeleteTask — при странных фейлах очистить
+   `redis-cli keys 'asynq:{default}:unique:*' | xargs redis-cli del`.
+
+```bash
+docker compose stop app
+POSTGRES_TEST_DSN='postgres://postgres:postgres@localhost:5432/interfin_test?sslmode=disable' \
+REDIS_TEST_ADDR=localhost:6379 \
+  go test -p 1 ./internal/...
+```
+
+5. Фронт:
+
+```bash
+cd web && npm test && cd ..
+```
+
+6. E2E чата (по образцу M10: сервер поднят локально, менеджеры и лид —
+   сетап-скриптом; M12 добавляет свой сценарий в web/e2e рядом с m10):
+
+```bash
+go run ./cmd/server &            # env как в README «Telegram webhook локально»
+bash scripts/m10_e2e_setup.sh    # e2e-учётки/лид (M12 переиспользует)
+cd web && E2E_BASE=http://localhost:8080 npm run test:e2e && cd ..
+```
+
+   Грабля e2e: обрыв WS имитировать `ws.terminate()`, не `close()`
+   (вежливый handshake доставляет события — тест ничего не проверит).
+
+7. Живой смоук счёта — ТОЛЬКО testnet (`CRYPTOBOT_USE_TESTNET=true`,
+   токен в .env; тестовые TON — кран @testgiver_ton_bot):
+   выставить счёт через новую ручку (curl с JWT от /auth/login) и оплатить
+   в @CryptoTestnetBot; карточка должна переехать, ссылка — прийти в чат.
+
+8. Финал — Definition of Done из CLAUDE.md §6 + критерии приёмки выше;
+   эпик закрывается одним squash-коммитом в `feat/m12-manager-chat`.
