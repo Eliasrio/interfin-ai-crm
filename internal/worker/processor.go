@@ -143,6 +143,25 @@ func (p *Processor) HandleProcessInbound(ctx context.Context, t *asynq.Task) err
 		return nil
 	}
 
+	// Нетекстовое входящее (голос/стикер/фото → content пуст): Claude звать
+	// не с чем — диалог, кончающийся репликой ассистента (или пустой),
+	// Sonnet 5 отвергает как prefill (api 400, поймано в проде на
+	// голосовом), а бюджетер на истории из одних пустых падает. Отвечаем
+	// детерминированной подсказкой тем же контуром save → send: ретрай
+	// после падения Send уйдёт в ветку переотправки выше.
+	if strings.TrimSpace(history[len(history)-1].Content) == "" {
+		tokens := estimateTokens(nonTextReply)
+		out := &models.Message{LeadID: lead.ID, Content: nonTextReply, Tokens: &tokens}
+		if err := d.Msgs.CreateOutbound(ctx, out); err != nil {
+			return fmt.Errorf("worker: сохранение подсказки о нетекстовом: %w", err)
+		}
+		if err := d.Sender.Send(lead.TelegramUserID, nonTextReply); err != nil {
+			return fmt.Errorf("worker: отправка подсказки о нетекстовом: %w", err)
+		}
+		log.Info("worker: нетекстовое входящее — отправлена подсказка, Claude не вызывался")
+		return nil
+	}
+
 	// 1) Typing — best effort: недоставленный индикатор не стоит ретрая.
 	if err := d.Sender.Typing(lead.TelegramUserID); err != nil {
 		log.Warn("worker: typing не отправлен", "error", err)

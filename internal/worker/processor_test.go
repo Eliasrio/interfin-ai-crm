@@ -433,3 +433,42 @@ func (f *fakeLeads) ListPendingTask(context.Context, int) ([]models.Lead, error)
 func (f *fakeLeads) ClearPendingTask(context.Context, int64, int) (bool, error) {
 	panic("pending_task здесь не используется (M11)")
 }
+
+// TestHandle_NonTextInbound — голос/стикер/фото: content пуст, диалог для
+// Claude кончается репликой ассистента (или пуст) → Claude НЕ вызывается,
+// лид получает детерминированную подсказку (prefill-400 Sonnet 5, прод-баг).
+func TestHandle_NonTextInbound(t *testing.T) {
+	cases := map[string][]models.Message{
+		"голос посреди диалога": {
+			{LeadID: 7, Direction: models.DirectionInbound, Content: "Здравствуйте!"},
+			{LeadID: 7, Direction: models.DirectionOutbound, Content: "Добрый день!"},
+			{LeadID: 7, Direction: models.DirectionInbound, Content: ""},
+		},
+		"первое сообщение — голос": {
+			{LeadID: 7, Direction: models.DirectionInbound, Content: "   "},
+		},
+	}
+	for name, history := range cases {
+		t.Run(name, func(t *testing.T) {
+			leads := newFakeLeads(testLead)
+			msgs := &fakeMsgs{history: history}
+			ai := &fakeAI{reply: "не должно понадобиться"}
+			snd := &fakeSender{}
+
+			err := newTestProcessor(t, leads, msgs, ai, snd).
+				HandleProcessInbound(context.Background(), inboundTask(t, 7, 100))
+			if err != nil {
+				t.Fatalf("handle: %v", err)
+			}
+			if ai.callCount() != 0 {
+				t.Errorf("claude вызван %d раз, ожидали 0", ai.callCount())
+			}
+			if len(msgs.created) != 1 || msgs.created[0].Content != nonTextReply {
+				t.Fatalf("outbound: %+v, ожидали одну подсказку nonTextReply", msgs.created)
+			}
+			if len(snd.sent) != 1 || snd.sent[0].text != nonTextReply {
+				t.Errorf("send: %+v, ожидали подсказку лиду", snd.sent)
+			}
+		})
+	}
+}
