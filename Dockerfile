@@ -10,8 +10,14 @@ RUN CGO_ENABLED=0 go build -o /out/server ./cmd/server \
  && CGO_ENABLED=0 go build -o /out/create-manager ./cmd/create-manager \
  && CGO_ENABLED=0 go build -o /out/index-kb ./cmd/index-kb
 
-FROM alpine:3.19
-RUN adduser -D -u 10001 app
+# 3.21 вместо 3.19: нужен поддерживаемый репозиторий со свежим
+# ca-certificates — устаревший комплект корней даёт «x509: unknown
+# authority» на новых цепочках (Backblaze/Let's Encrypt), а Go-клиенты
+# (Claude/Voyage/CryptoBot) такие ошибки молча ретраят (урок первого
+# боевого деплоя — см. ops/postgres/Dockerfile).
+FROM alpine:3.21
+RUN apk add --no-cache ca-certificates \
+ && adduser -D -u 10001 app
 WORKDIR /app
 COPY --from=build /out/server /app/server
 COPY --from=build /out/migrate /app/migrate

@@ -6,6 +6,16 @@
 
 FROM pgvector/pgvector:pg16
 
+# Свежие корневые сертификаты: комплект в базовом образе устаревает, и
+# wal-g перестаёт доверять Backblaze («x509: certificate signed by unknown
+# authority»), причём AWS SDK такие ошибки МОЛЧА ретраит с backoff'ом —
+# выглядит как вечное зависание backup-push (поймано при первом боевом
+# деплое).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates \
+ && update-ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
 # В релизе v3.0.3 бинари собраны под ubuntu-20.04 (glibc совместим с debian
 # bookworm базового образа).
 ARG WALG_VERSION=v3.0.3
