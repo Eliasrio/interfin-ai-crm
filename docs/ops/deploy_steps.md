@@ -229,19 +229,20 @@ docker exec -u postgres $(docker ps -qf name=crm_postgres-primary) \
 ## Фаза 8. Первичные данные (15 мин)
 
 Обе утилиты выполняются внутри работающего контейнера app (сеть стека не
-attachable для docker run; POSTGRES_DSN и VOYAGE_API_KEY в контейнере уже
-есть из app_env):
+attachable для docker run). ВАЖНО: docker exec идёт МИМО entrypoint'а,
+поэтому app_env надо сорсить явно в каждой команде (поймано при первом
+боевом деплое — «create-manager: не задан POSTGRES_DSN»):
 
 ```bash
 # учётка администратора доски (пароль спросит интерактивно):
 docker exec -it $(docker ps -qf name=crm_app | head -1) \
-  /app/create-manager -email admin@<домен> -role admin
+  sh -c 'set -a; . /run/secrets/app_env; set +a; /app/create-manager -email admin@<домен> -role admin'
 
 # база знаний RAG: наполнить docs/kb боевыми .md-документами, затем
 # скопировать в контейнер и проиндексировать:
 APP=$(docker ps -qf name=crm_app | head -1)
 docker cp docs/kb "$APP":/tmp/kb
-docker exec "$APP" /app/index-kb -dir /tmp/kb
+docker exec "$APP" sh -c 'set -a; . /run/secrets/app_env; set +a; /app/index-kb -dir /tmp/kb'
 docker exec "$APP" rm -rf /tmp/kb
 ```
 
