@@ -1,5 +1,15 @@
 # Multi-stage build: компилируем статический бинарь, кладём в маленький alpine.
 
+# React-доска (M10): собирается ЗДЕСЬ, а не берётся с диска — web/dist в
+# git не живёт, и без этого этапа боевой образ отдавал 404 на / (поймано
+# при первом боевом деплое).
+FROM node:20-alpine AS webbuild
+WORKDIR /web
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+COPY web/ ./
+RUN npm run build
+
 FROM golang:1.22-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -27,6 +37,8 @@ COPY --from=build /out/create-manager /app/create-manager
 COPY --from=build /out/index-kb /app/index-kb
 COPY config/config.yaml /app/config/config.yaml
 COPY migrations /app/migrations
+# server.static_dir: web/dist (относительно WORKDIR /app)
+COPY --from=webbuild /web/dist /app/web/dist
 # M11: мост «Docker secrets → env» для prod (dev без секрета app_env — no-op).
 COPY ops/docker/app-entrypoint.sh /app/entrypoint.sh
 USER app
