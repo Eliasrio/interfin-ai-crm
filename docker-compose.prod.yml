@@ -143,7 +143,11 @@ services:
     networks:
       - backend
     healthcheck:
-      test: ["CMD-SHELL", "psql -h 127.0.0.1 -p 6432 -U pgbouncer_admin pgbouncer -c 'SHOW VERSION;' || exit 1"]
+      # ВАЖНО: НЕ psql к консоли pgbouncer — pgbouncer_admin под SCRAM
+      # требует пароль, которого у healthcheck нет, и проверка вечно валит
+      # контейнер (поймано при первом боевом деплое). pg_isready проверяет
+      # живость листенера без аутентификации.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 6432 || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5
