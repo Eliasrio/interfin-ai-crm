@@ -171,7 +171,7 @@ func TestHandle_RAGChunksInjected(t *testing.T) {
 	if !strings.Contains(system, "Минимальный депозит") || !strings.Contains(system, "Вывод средств") {
 		t.Errorf("system prompt без RAG-чанков:\n%s", system)
 	}
-	if !strings.Contains(system, "INTERFIN GROUP") {
+	if !strings.Contains(system, "Эй, мама") {
 		t.Error("база system prompt потерялась при инжекте RAG")
 	}
 }
@@ -191,7 +191,7 @@ func TestHandle_RAGMissFallsBack(t *testing.T) {
 	if snd.sentCount() != 1 {
 		t.Fatal("ответ лиду не отправлен")
 	}
-	if strings.Contains(ai.lastSystem(), "базы знаний") {
+	if strings.Contains(ai.lastSystem(), "Выдержки из базы знаний") {
 		t.Errorf("при rag_miss RAG-секции в system быть не должно:\n%s", ai.lastSystem())
 	}
 }
