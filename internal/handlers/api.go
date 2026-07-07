@@ -17,6 +17,8 @@ const (
 	codeStageConflict     = "ERR_STAGE_CONFLICT"     // 409: state conflict
 	codeRateLimited       = "ERR_RATE_LIMITED"       // 429: 100 req/min per IP
 	codeInternal          = "ERR_INTERNAL"           // 500
+	codeTelegramSend      = "ERR_TELEGRAM_SEND"      // 502: Telegram не принял отправку (M12)
+	codeInvoiceCreate     = "ERR_INVOICE_CREATE"     // 502: Crypto Pay не создал счёт (M12)
 )
 
 // apiError — единственная точка формирования ошибок API (§4.2).

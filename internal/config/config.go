@@ -50,6 +50,10 @@ type TelegramConfig struct {
 	// ManagerChatID — чат для алертов dead letter (§6.3). Опционален:
 	// 0 = алерты остаются только в логе.
 	ManagerChatID int64 `mapstructure:"manager_chat_id"`
+	// APIURL — адрес Telegram Bot API. Пусто (prod/dev) = боевой
+	// https://api.telegram.org; задаётся ТОЛЬКО для e2e M12 — локальный стаб
+	// scripts/tg_stub принимает sendMessage без живого Telegram.
+	APIURL string `mapstructure:"api_url"`
 }
 
 type DatabaseConfig struct {

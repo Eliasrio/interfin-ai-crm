@@ -52,6 +52,9 @@ func NewWebhookBot(cfg config.TelegramConfig, log *slog.Logger, offline bool) (*
 	}
 
 	bot, err := tele.NewBot(tele.Settings{
+		// URL пустой = боевой api.telegram.org (telebot-дефолт); стаб
+		// scripts/tg_stub подставляется ТОЛЬКО в e2e M12 через TELEGRAM_API_URL.
+		URL:     cfg.APIURL,
 		Token:   cfg.BotToken,
 		Poller:  wh, // webhook-режим; polling запрещён (CLAUDE.md §4.10)
 		Offline: offline,

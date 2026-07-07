@@ -127,6 +127,10 @@ func (wsMsgs) ListByLead(context.Context, int64, int) ([]models.Message, error) 
 	return nil, nil
 }
 
+func (wsMsgs) ListByLeadBefore(context.Context, int64, int64, int) ([]models.Message, error) {
+	return nil, nil
+}
+
 type noopTTL struct{}
 
 func (noopTTL) Schedule(context.Context, int64, time.Duration) error { return nil }

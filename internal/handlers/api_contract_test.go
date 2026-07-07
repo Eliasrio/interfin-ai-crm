@@ -35,6 +35,7 @@ type apiStore struct {
 	mu       sync.Mutex
 	leads    map[int64]*models.Lead
 	msgs     map[int64][]models.Message
+	msgSeq   int64 // id для CreateOutbound (чат M12)
 	payments map[int64][]models.PaymentEvent
 	audit    []models.LGPDAudit
 }
@@ -108,13 +109,40 @@ type apiMsgs struct{ s *apiStore }
 func (f *apiMsgs) CreateInbound(context.Context, *models.Message) error {
 	panic("не зовётся из /api")
 }
-func (f *apiMsgs) CreateOutbound(context.Context, *models.Message) error {
-	panic("не зовётся из /api")
+
+// CreateOutbound зеркалит боевой messageRepo: строка получает id, счётчики
+// лида НЕ трогаются (CLAUDE.md §4.3). Зовёт ручка чата M12.
+func (f *apiMsgs) CreateOutbound(_ context.Context, m *models.Message) error {
+	f.s.mu.Lock()
+	defer f.s.mu.Unlock()
+	f.s.msgSeq++
+	m.ID = f.s.msgSeq
+	m.Direction = models.DirectionOutbound
+	f.s.msgs[m.LeadID] = append(f.s.msgs[m.LeadID], *m)
+	return nil
 }
+
 func (f *apiMsgs) ListByLead(_ context.Context, leadID int64, _ int) ([]models.Message, error) {
 	f.s.mu.Lock()
 	defer f.s.mu.Unlock()
 	return append([]models.Message(nil), f.s.msgs[leadID]...), nil
+}
+
+// ListByLeadBefore зеркалит боевую пагинацию: последние limit с id < beforeID
+// (0 — просто последние), от старых к новым.
+func (f *apiMsgs) ListByLeadBefore(_ context.Context, leadID, beforeID int64, limit int) ([]models.Message, error) {
+	f.s.mu.Lock()
+	defer f.s.mu.Unlock()
+	var out []models.Message
+	for _, m := range f.s.msgs[leadID] {
+		if beforeID <= 0 || m.ID < beforeID {
+			out = append(out, m)
+		}
+	}
+	if limit > 0 && len(out) > limit {
+		out = out[len(out)-limit:]
+	}
+	return out, nil
 }
 
 type apiPayments struct{ s *apiStore }
@@ -231,11 +259,14 @@ func (l *countingLimiter) Allow(context.Context, string) (bool, error) {
 // --- сборка роутера как в cmd/server ---
 
 type apiRig struct {
-	router  *gin.Engine
-	store   *apiStore
-	machine *apiMachine
-	issuer  *auth.Issuer
-	limiter *countingLimiter
+	router   *gin.Engine
+	store    *apiStore
+	machine  *apiMachine
+	issuer   *auth.Issuer
+	limiter  *countingLimiter
+	sender   *chatSender
+	invoices *chatInvoices
+	pub      *fakePub
 }
 
 func newAPIRig(t *testing.T, leads ...*models.Lead) *apiRig {
@@ -248,6 +279,9 @@ func newAPIRig(t *testing.T, leads ...*models.Lead) *apiRig {
 	store := newAPIStore(leads...)
 	machine := &apiMachine{s: store}
 	limiter := &countingLimiter{limit: 100}
+	sender := &chatSender{}
+	invoices := &chatInvoices{}
+	pub := &fakePub{}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 
 	r := gin.New()
@@ -271,13 +305,25 @@ func newAPIRig(t *testing.T, leads ...*models.Lead) *apiRig {
 		Salt:     "test-salt",
 		Log:      log,
 	}).Register(api)
+	// M12: чат и счёт — как в cmd/server, на той же группе.
+	NewChat(ChatDeps{
+		Leads:    &apiLeads{s: store},
+		Msgs:     &apiMsgs{s: store},
+		Sender:   sender,
+		Invoices: invoices,
+		Pub:      pub,
+		Log:      log,
+	}).Register(api)
 
 	return &apiRig{
-		router:  r,
-		store:   store,
-		machine: machine,
-		issuer:  auth.NewIssuer(key, time.Minute),
-		limiter: limiter,
+		router:   r,
+		store:    store,
+		machine:  machine,
+		issuer:   auth.NewIssuer(key, time.Minute),
+		limiter:  limiter,
+		sender:   sender,
+		invoices: invoices,
+		pub:      pub,
 	}
 }
 

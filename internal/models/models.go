@@ -108,6 +108,14 @@ const (
 	DirectionOutbound = "outbound"
 )
 
+// Авторство outbound-сообщений (M12): бот либо конкретный менеджер.
+// NULL в старых строках читается как AuthorBot (0012); у inbound автор
+// всегда NULL — автор и так лид.
+const (
+	AuthorBot           = "bot"
+	AuthorManagerPrefix = "manager:" // + Subject из JWT claims
+)
+
 // Lead — §8.1. Строка Kanban-доски: один Telegram-пользователь = один лид.
 type Lead struct {
 	ID               int64          `gorm:"column:id;primaryKey"`
@@ -130,11 +138,12 @@ type Lead struct {
 
 func (Lead) TableName() string { return "leads" }
 
-// Message — §8.2. Одна реплика диалога (лид или бот).
+// Message — §8.2. Одна реплика диалога (лид, бот или менеджер — M12).
 type Message struct {
 	ID        int64     `gorm:"column:id;primaryKey"`
 	LeadID    int64     `gorm:"column:lead_id"`
 	Direction string    `gorm:"column:direction"` // inbound | outbound (CHECK в БД)
+	Author    *string   `gorm:"column:author"`    // 'bot' | 'manager:<id>'; NULL = bot в старых строках (0012)
 	Content   string    `gorm:"column:content"`
 	Tokens    *int      `gorm:"column:tokens"`
 	CreatedAt time.Time `gorm:"column:created_at"`

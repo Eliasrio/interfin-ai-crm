@@ -1,12 +1,13 @@
-// LeadModal — карточка лида (задача M10-4): история диалога, платежи,
+// LeadModal — карточка лида (задача M10-4): чат менеджера (M12), платежи,
 // кнопки ручных переходов Stage 5/6/7 и LGPD-панель (задача M10-5).
 // Живёт на GET /api/leads/:id; стадия берётся из store — карточка двигается
-// live, даже пока модалка открыта.
+// live, даже пока модалка открыта. Диалог — ChatPanel (история + live-чат).
 import { useEffect, useState } from 'react'
 import * as api from '../lib/api.js'
 import { MANUAL_TARGETS, stageById } from '../lib/stages.js'
 import { useStore } from '../hooks.js'
 import { displayName } from './LeadCard.jsx'
+import ChatPanel from './ChatPanel.jsx'
 import LgpdPanel from './LgpdPanel.jsx'
 
 export default function LeadModal({ leadId, role, onClose, onMoveLead }) {
@@ -77,30 +78,13 @@ export default function LeadModal({ leadId, role, onClose, onMoveLead }) {
         </section>
 
         <section className="modal-section">
-          <h3>Диалог</h3>
+          <h3>Чат</h3>
           {error && <div className="form-error">{error}</div>}
-          {!detail && !error && <div className="muted">Загружаем…</div>}
-          {detail && <Dialog messages={detail.messages} />}
+          <ChatPanel lead={lead} />
         </section>
 
         <LgpdPanel leadId={lead.id} role={role} />
       </div>
-    </div>
-  )
-}
-
-function Dialog({ messages }) {
-  if (!messages.length) return <div className="muted">Сообщений нет</div>
-  return (
-    <div className="dialog">
-      {messages.map((m) => (
-        <div key={m.id} className={'msg msg-' + m.direction}>
-          <div className="msg-content">{m.content}</div>
-          <div className="msg-ts">
-            {m.direction === 'inbound' ? 'лид' : 'бот'} · {fmtTs(m.created_at)}
-          </div>
-        </div>
-      ))}
     </div>
   )
 }

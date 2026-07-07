@@ -96,16 +96,22 @@ func toLeadDTO(l *models.Lead) leadDTO {
 type messageDTO struct {
 	ID        int64     `json:"id"`
 	Direction string    `json:"direction"`
+	Author    *string   `json:"author"` // M12: 'bot' | 'manager:<id>'; null (старые строки/inbound) UI читает как bot/лид
 	Content   string    `json:"content"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
+func toMessageDTO(m *models.Message) messageDTO {
+	return messageDTO{
+		ID: m.ID, Direction: m.Direction, Author: m.Author,
+		Content: m.Content, CreatedAt: m.CreatedAt,
+	}
+}
+
 func toMessageDTOs(msgs []models.Message) []messageDTO {
 	out := make([]messageDTO, 0, len(msgs))
-	for _, m := range msgs {
-		out = append(out, messageDTO{
-			ID: m.ID, Direction: m.Direction, Content: m.Content, CreatedAt: m.CreatedAt,
-		})
+	for i := range msgs {
+		out = append(out, toMessageDTO(&msgs[i]))
 	}
 	return out
 }

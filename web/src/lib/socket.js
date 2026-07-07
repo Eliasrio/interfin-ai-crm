@@ -19,6 +19,7 @@
 import * as auth from './auth.js'
 import * as api from './api.js'
 import * as store from './store.js'
+import * as chat from './chat.js'
 
 const FALLBACK_POLL_MS = 5000 // §10.1: polling mode — 5 с
 const RECONNECT_BASE_MS = 500
@@ -127,6 +128,10 @@ export class KanbanSocket {
         store.setConnection('live')
         return
       default: {
+        // M12: событие message уходит и в чат-панель. Доске оно тоже
+        // отдаётся: store игнорирует незнакомый тип, но двигает lastEventTs,
+        // а по неизвестному лиду карточка дотягивается по REST.
+        if (ev.type === 'message') chat.applyEvent(ev)
         const known = store.applyEvent(ev)
         if (!known) this.fetchUnknownLead(ev.lead_id)
       }

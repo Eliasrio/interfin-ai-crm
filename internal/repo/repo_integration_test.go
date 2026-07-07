@@ -78,6 +78,32 @@ func TestInboundOnlyCounters(t *testing.T) {
 	if history[0].ID >= history[len(history)-1].ID {
 		t.Error("ListByLead: порядок должен быть старые → новые")
 	}
+
+	// M12: before_id листает историю назад (страница СТАРШЕ переданного id),
+	// порядок внутри страницы тот же — старые → новые.
+	page, err := msgs.ListByLeadBefore(ctx, lead.ID, history[0].ID, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page) != 2 {
+		t.Fatalf("ListByLeadBefore: %d сообщений, ждали 2", len(page))
+	}
+	if page[0].ID >= page[1].ID || page[1].ID >= history[0].ID {
+		t.Errorf("ListByLeadBefore: ждали два id старше %d по возрастанию, получили %d, %d",
+			history[0].ID, page[0].ID, page[1].ID)
+	}
+	// author (0012) ходит в обе стороны через GORM-модель.
+	author := models.AuthorManagerPrefix + "7"
+	if err := msgs.CreateOutbound(ctx, &models.Message{LeadID: lead.ID, Author: &author, Content: "от менеджера"}); err != nil {
+		t.Fatal(err)
+	}
+	last, err := msgs.ListByLead(ctx, lead.ID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(last) != 1 || last[0].Author == nil || *last[0].Author != author {
+		t.Fatalf("author не сохранился/не прочитался: %+v", last)
+	}
 }
 
 func TestDirectionCheckConstraint(t *testing.T) {

@@ -14,6 +14,7 @@ telegram:
   webhook_secret: ${TELEGRAM_WEBHOOK_SECRET}
   webhook_url: ${TELEGRAM_WEBHOOK_URL}
   manager_chat_id: ${TELEGRAM_MANAGER_CHAT_ID} # опционально: алерты dead letter (§6.3)
+  api_url: ${TELEGRAM_API_URL}                 # ТОЛЬКО e2e M12 (scripts/tg_stub); пусто = боевой API
 
 database:
   dsn: ${POSTGRES_DSN}

@@ -85,6 +85,18 @@ describe('LeadModal', () => {
     store.applyLeads([makeLead({ id: 8, name: 'Мария', stage_id: 4, manual_resolution: true })])
     mockFetch([
       {
+        // M12: диалог карточки живёт в чат-панели на GET .../messages.
+        match: (u) => u.startsWith('/api/leads/8/messages'),
+        reply: {
+          body: {
+            messages: [
+              { id: 1, direction: 'inbound', author: null, content: 'Здравствуйте, хочу консультацию', created_at: '2026-07-06T10:00:00Z' },
+              { id: 2, direction: 'outbound', author: 'bot', content: 'Добрый день! Подскажите…', created_at: '2026-07-06T10:00:05Z' },
+            ],
+          },
+        },
+      },
+      {
         match: (u) => u === '/api/leads/8',
         reply: {
           body: {

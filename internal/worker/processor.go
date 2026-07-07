@@ -21,6 +21,7 @@ import (
 	"github.com/hibiken/asynq"
 
 	"github.com/interfin/interfin-ai-crm/internal/claude"
+	"github.com/interfin/interfin-ai-crm/internal/events"
 	"github.com/interfin/interfin-ai-crm/internal/models"
 	"github.com/interfin/interfin-ai-crm/internal/queue"
 	"github.com/interfin/interfin-ai-crm/internal/repo"
@@ -67,6 +68,10 @@ type ProcessorDeps struct {
 	// M5 (state machine): авто-триггеры §3.2/§3.4/§3.5 на каждый inbound.
 	// nil — режим юнит-тестов M3 (диалог без Kanban-логики).
 	Kanban StateMachine
+
+	// M12: событие message на каждый сохранённый outbound (чат менеджера
+	// live). nil — без публикации (юнит-тесты M3).
+	Pub events.Publisher
 
 	Log *slog.Logger
 }
@@ -151,10 +156,12 @@ func (p *Processor) HandleProcessInbound(ctx context.Context, t *asynq.Task) err
 	// после падения Send уйдёт в ветку переотправки выше.
 	if strings.TrimSpace(history[len(history)-1].Content) == "" {
 		tokens := estimateTokens(nonTextReply)
-		out := &models.Message{LeadID: lead.ID, Content: nonTextReply, Tokens: &tokens}
+		author := models.AuthorBot
+		out := &models.Message{LeadID: lead.ID, Author: &author, Content: nonTextReply, Tokens: &tokens}
 		if err := d.Msgs.CreateOutbound(ctx, out); err != nil {
 			return fmt.Errorf("worker: сохранение подсказки о нетекстовом: %w", err)
 		}
+		p.publishMessage(ctx, out, lead.StageID, log)
 		if err := d.Sender.Send(lead.TelegramUserID, nonTextReply); err != nil {
 			return fmt.Errorf("worker: отправка подсказки о нетекстовом: %w", err)
 		}
@@ -192,10 +199,14 @@ func (p *Processor) HandleProcessInbound(ctx context.Context, t *asynq.Task) err
 
 	// 5) Save outbound. Счётчики лида НЕ трогаем (CLAUDE.md §4.3).
 	replyTokens := estimateTokens(reply)
-	out := &models.Message{LeadID: lead.ID, Content: reply, Tokens: &replyTokens}
+	author := models.AuthorBot
+	out := &models.Message{LeadID: lead.ID, Author: &author, Content: reply, Tokens: &replyTokens}
 	if err := d.Msgs.CreateOutbound(ctx, out); err != nil {
 		return fmt.Errorf("worker: сохранение ответа: %w", err)
 	}
+	// M12: событие message сразу после save, а не после send: ветка
+	// переотправки (ретрай упавшего Send) второй раз НЕ публикует.
+	p.publishMessage(ctx, out, lead.StageID, log)
 
 	// 6) Send. При падении ретрай уйдёт в ветку переотправки выше.
 	if err := d.Sender.Send(lead.TelegramUserID, reply); err != nil {
@@ -212,6 +223,18 @@ func (p *Processor) HandleProcessInbound(ctx context.Context, t *asynq.Task) err
 		"reply_tokens_estimate", replyTokens,
 	)
 	return nil
+}
+
+// publishMessage — событие message (M12) для сохранённого outbound.
+// Fire-and-forget: пропуск клиент добирает перезапросом истории (§10.3),
+// бизнес-операцию не роняем.
+func (p *Processor) publishMessage(ctx context.Context, msg *models.Message, stageID int16, log *slog.Logger) {
+	if p.deps.Pub == nil {
+		return
+	}
+	if err := p.deps.Pub.Publish(ctx, events.MessageEvent(msg, stageID)); err != nil {
+		log.Warn("worker: событие message не опубликовано", "error", err)
+	}
 }
 
 // loadSummary достаёт сводку диалога (§7.3) для инжекта в контекст.

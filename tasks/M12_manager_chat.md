@@ -83,19 +83,22 @@
   `scripts/new_invoice.sh` остаётся как запасной терминальный путь.
 
 ## Критерии приёмки
-- [ ] Сообщение из карточки доходит лиду в Telegram; строка в `messages`
+- [x] Сообщение из карточки доходит лиду в Telegram; строка в `messages`
       (outbound, author=`manager:<id>`); чат в другой открытой вкладке
       обновляется live без перезагрузки (метод: e2e по образцу m10_e2e).
-- [ ] Отказ Telegram → 502 `ERR_TELEGRAM_SEND`, в `messages` записи нет
+- [x] Отказ Telegram → 502 `ERR_TELEGRAM_SEND`, в `messages` записи нет
       (contract-тест с фейковым Sender).
-- [ ] Счёт из карточки: клиент получает ссылку в чат, менеджер видит URL;
-      оплата двигает карточку (живой smoke в testnet ИЛИ моком вебхука M6).
-- [ ] `GET .../messages` — порядок от старых к новым, `before_id` листает
-      назад, стёртый лид → 404.
-- [ ] Эмма отвечает с учётом реплики менеджера (contract-тест prompt-сборки).
-- [ ] Inbound-сообщения клиента тоже приходят WS-событием `message`
-      (чат живой в обе стороны).
-- [ ] `go build ./...`, `go vet ./...`, schema-lint, `npm test` зелёные.
+- [x] Счёт из карточки: клиент получает ссылку в чат, менеджер видит URL
+      (живой смоук testnet в e2e, E2E_INVOICE=1); оплата двигает карточку —
+      контур M6 переиспользован целиком (payload=lead_id через
+      payment.Client), вебхук→стадия закрыт contract-тестами M6.
+- [x] `GET .../messages` — порядок от старых к новым, `before_id` листает
+      назад, стёртый лид → 404 (contract- и repo-интеграционный тесты).
+- [x] Эмма отвечает с учётом реплики менеджера (contract-тест prompt-сборки
+      TestPromptBuild_ManagerOutboundInMessages).
+- [x] Inbound-сообщения клиента тоже приходят WS-событием `message`
+      (чат живой в обе стороны; contract-тест вебхука + живой e2e).
+- [x] `go build ./...`, `go vet ./...`, schema-lint, `npm test` зелёные.
 
 ## Как прогнать проверки (полный чек-лист команд)
 
@@ -149,17 +152,34 @@ REDIS_TEST_ADDR=localhost:6379 \
 cd web && npm test && cd ..
 ```
 
-6. E2E чата (по образцу M10: сервер поднят локально, менеджеры и лид —
-   сетап-скриптом; M12 добавляет свой сценарий в web/e2e рядом с m10):
+6. E2E чата (по образцу M10: сервер поднят локально, менеджеры —
+   сетап-скриптом; сценарий M12 — web/e2e/chat.e2e.test.jsx, своего лида
+   он создаёт сам живым вебхуком и стирает лидов прошлых прогонов).
+   Боевой Telegram не доставит фейковому лиду (chat not found), поэтому
+   сервер на e2e смотрит в СТАБ Bot API (scripts/tg_stub; конфиг
+   telegram.api_url, в prod/dev пуст = боевой API):
 
 ```bash
-go run ./cmd/server &            # env как в README «Telegram webhook локально»
-bash scripts/m10_e2e_setup.sh    # e2e-учётки/лид (M12 переиспользует)
-cd web && E2E_BASE=http://localhost:8080 npm run test:e2e && cd ..
+docker compose stop app          # :8080 нужен локальному серверу
+go run ./scripts/tg_stub &       # фейковый Telegram Bot API на :8091
+set -a; source .env; set +a
+HTTP_PORT=8080 TELEGRAM_API_URL=http://localhost:8091 \
+TELEGRAM_WEBHOOK_URL=http://localhost:8080/webhook/telegram \
+  go run ./cmd/server &
+bash scripts/m10_e2e_setup.sh    # e2e-учётки менеджеров (M12 переиспользует)
+cd web && E2E_BASE=http://localhost:8080 \
+  E2E_TG_STUB=http://localhost:8091 \
+  E2E_TG_SECRET=$TELEGRAM_WEBHOOK_SECRET \
+  E2E_INVOICE=1 npm run test:e2e && cd ..   # E2E_INVOICE=1 — живой смоук
+                                            # счёта, нужен testnet-токен в .env
 ```
 
-   Грабля e2e: обрыв WS имитировать `ws.terminate()`, не `close()`
-   (вежливый handshake доставляет события — тест ничего не проверит).
+   Грабли e2e (ловлены в M12): обрыв WS имитировать `ws.terminate()`, не
+   `close()` (вежливый handshake доставляет события — тест ничего не
+   проверит); пузырь искать `within(chat-list)` — React зеркалит value
+   textarea в textContent, глобальный findByText находит сам textarea;
+   /api под rate limit 100/мин с IP — не частить поллингом и не гонять
+   прогоны подряд.
 
 7. Живой смоук счёта — ТОЛЬКО testnet (`CRYPTOBOT_USE_TESTNET=true`,
    токен в .env; тестовые TON — кран @testgiver_ton_bot):

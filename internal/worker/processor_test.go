@@ -140,6 +140,10 @@ func (f *fakeMsgs) CreateOutbound(_ context.Context, m *models.Message) error {
 	return nil
 }
 
+func (f *fakeMsgs) ListByLeadBefore(ctx context.Context, leadID, _ int64, limit int) ([]models.Message, error) {
+	return f.ListByLead(ctx, leadID, limit)
+}
+
 func (f *fakeMsgs) ListByLead(_ context.Context, leadID int64, limit int) ([]models.Message, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

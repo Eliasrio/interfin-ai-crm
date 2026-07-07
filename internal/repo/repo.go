@@ -68,6 +68,10 @@ type MessageRepo interface {
 	// ListByLead — последние limit сообщений лида, от старых к новым
 	// (порядок, в котором история уходит в контекст Claude).
 	ListByLead(ctx context.Context, leadID int64, limit int) ([]models.Message, error)
+	// ListByLeadBefore — страница истории для чата M12: последние limit
+	// сообщений с id < beforeID (0 — просто последние), от старых к новым.
+	// Прокрутка вверх: клиент передаёт id старейшего загруженного сообщения.
+	ListByLeadBefore(ctx context.Context, leadID, beforeID int64, limit int) ([]models.Message, error)
 }
 
 // ListLeadsParams — параметры LeadRepo.List. Limit <= 0 недопустим

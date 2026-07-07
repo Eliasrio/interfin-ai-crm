@@ -4,10 +4,13 @@
 import { getToken, refresh } from './auth.js'
 
 export class ApiError extends Error {
-  constructor(message, code, status) {
+  constructor(message, code, status, data = null) {
     super(message)
     this.code = code
     this.status = status
+    // data — тело ошибки целиком: 502 счёта (M12) несёт в нём живой url,
+    // который менеджер перешлёт вручную.
+    this.data = data
   }
 }
 
@@ -38,7 +41,7 @@ export async function apiFetch(path, opts = {}) {
     /* тело не JSON — для ok-ответов бэкенд M8 так не делает */
   }
   if (!res.ok) {
-    throw new ApiError(data?.error || `HTTP ${res.status}`, data?.code || 'ERR_HTTP_' + res.status, res.status)
+    throw new ApiError(data?.error || `HTTP ${res.status}`, data?.code || 'ERR_HTTP_' + res.status, res.status, data)
   }
   return data
 }
@@ -69,6 +72,28 @@ export function fetchLead(id) {
 
 export function patchStage(id, stageId) {
   return apiFetch(`/api/leads/${id}/stage`, { method: 'PATCH', body: { stage_id: stageId } })
+}
+
+// --- Ручки M12 (чат менеджера и счёт; контракт — tasks/M12_manager_chat.md) ---
+
+// fetchMessages — страница истории от старых к новым; beforeId — прокрутка
+// вверх (id старейшего уже загруженного сообщения).
+export function fetchMessages(id, { limit, beforeId } = {}) {
+  const q = new URLSearchParams()
+  if (limit) q.set('limit', String(limit))
+  if (beforeId) q.set('before_id', String(beforeId))
+  const qs = q.toString()
+  return apiFetch(`/api/leads/${id}/messages` + (qs ? '?' + qs : ''))
+}
+
+export function postMessage(id, text) {
+  return apiFetch(`/api/leads/${id}/messages`, { method: 'POST', body: { text } })
+}
+
+export function postInvoice(id, { amount, asset, description }) {
+  const body = { amount, asset }
+  if (description) body.description = description
+  return apiFetch(`/api/leads/${id}/invoice`, { method: 'POST', body })
 }
 
 export function lgpdErase(id) {

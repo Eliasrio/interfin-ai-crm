@@ -144,6 +144,10 @@ func (f *fakeMsgs) ListByLead(context.Context, int64, int) ([]models.Message, er
 	return nil, nil
 }
 
+func (f *fakeMsgs) ListByLeadBefore(context.Context, int64, int64, int) ([]models.Message, error) {
+	return nil, nil
+}
+
 type ttlCall struct {
 	leadID int64
 	delay  time.Duration

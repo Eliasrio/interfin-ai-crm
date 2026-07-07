@@ -35,6 +35,7 @@ import (
 	"github.com/interfin/interfin-ai-crm/internal/claude"
 	"github.com/interfin/interfin-ai-crm/internal/config"
 	"github.com/interfin/interfin-ai-crm/internal/db"
+	"github.com/interfin/interfin-ai-crm/internal/events"
 	"github.com/interfin/interfin-ai-crm/internal/handlers"
 	"github.com/interfin/interfin-ai-crm/internal/queue"
 	"github.com/interfin/interfin-ai-crm/internal/repo"
@@ -234,7 +235,7 @@ func TestE2E_LeadWritesAndGetsClaudeReply(t *testing.T) {
 	// --- HTTP-цепочка M2: POST /webhook/telegram ---
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	handlers.NewTelegramWebhook(leads, msgs, q, webhookSecret, log).
+	handlers.NewTelegramWebhook(leads, msgs, q, events.NewRedisPublisher(rdb), webhookSecret, log).
 		Register(router, telegram.NewDispatcher(bot))
 
 	update := fmt.Sprintf(`{

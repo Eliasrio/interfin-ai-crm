@@ -204,12 +204,25 @@ func (r *messageRepo) CreateOutbound(ctx context.Context, msg *models.Message) e
 }
 
 func (r *messageRepo) ListByLead(ctx context.Context, leadID int64, limit int) ([]models.Message, error) {
+	return r.listPage(ctx, leadID, 0, limit, "repo: list messages")
+}
+
+// ListByLeadBefore — страница чата M12: те же «последние limit, старые →
+// новые», но от точки beforeID (прокрутка истории вверх).
+func (r *messageRepo) ListByLeadBefore(ctx context.Context, leadID, beforeID int64, limit int) ([]models.Message, error) {
+	return r.listPage(ctx, leadID, beforeID, limit, "repo: list messages before")
+}
+
+func (r *messageRepo) listPage(ctx context.Context, leadID, beforeID int64, limit int, what string) ([]models.Message, error) {
 	// Подзапросом берём последние limit, снаружи разворачиваем к порядку
-	// «старые → новые» — так история уходит в контекст Claude.
+	// «старые → новые» — так история уходит в контекст Claude и в чат M12.
 	sub := r.db.WithContext(ctx).
 		Model(&models.Message{}).
 		Where("lead_id = ?", leadID).
 		Order("id DESC")
+	if beforeID > 0 {
+		sub = sub.Where("id < ?", beforeID)
+	}
 	if limit > 0 {
 		sub = sub.Limit(limit)
 	}
@@ -219,7 +232,7 @@ func (r *messageRepo) ListByLead(ctx context.Context, leadID int64, limit int) (
 		Order("id ASC").
 		Find(&msgs).Error
 	if err != nil {
-		return nil, fmt.Errorf("repo: list messages: %w", err)
+		return nil, fmt.Errorf("%s: %w", what, err)
 	}
 	return msgs, nil
 }

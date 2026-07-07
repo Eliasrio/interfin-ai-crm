@@ -23,6 +23,7 @@ import (
 	"github.com/gin-gonic/gin"
 	tele "gopkg.in/telebot.v3"
 
+	"github.com/interfin/interfin-ai-crm/internal/events"
 	"github.com/interfin/interfin-ai-crm/internal/models"
 	"github.com/interfin/interfin-ai-crm/internal/queue"
 	"github.com/interfin/interfin-ai-crm/internal/repo"
@@ -41,6 +42,7 @@ type TelegramWebhook struct {
 	leads  repo.LeadRepo
 	msgs   repo.MessageRepo
 	queue  queue.Enqueuer
+	pub    events.Publisher // M12: событие message на каждый inbound; nil — без публикации (тесты M2)
 	secret string
 	log    *slog.Logger
 }
@@ -49,10 +51,11 @@ func NewTelegramWebhook(
 	leads repo.LeadRepo,
 	msgs repo.MessageRepo,
 	q queue.Enqueuer,
+	pub events.Publisher,
 	secret string,
 	log *slog.Logger,
 ) *TelegramWebhook {
-	return &TelegramWebhook{leads: leads, msgs: msgs, queue: q, secret: secret, log: log}
+	return &TelegramWebhook{leads: leads, msgs: msgs, queue: q, pub: pub, secret: secret, log: log}
 }
 
 // Register вешает цепочку на POST /webhook/telegram. dispatch — telebot-webhook
@@ -142,6 +145,16 @@ func (h *TelegramWebhook) SaveAndReturn200() gin.HandlerFunc {
 			h.abortSaveFailed(c, "webhook: сообщение не сохранено", err,
 				slog.Int64("lead_id", lead.ID))
 			return
+		}
+
+		// M12: чат менеджера живой в обе стороны — inbound уходит событием
+		// message. Fire-and-forget, как всё в crm:events: пропуск клиент
+		// добирает перезапросом истории при reconnect (§10.3).
+		if h.pub != nil {
+			if err := h.pub.Publish(ctx, events.MessageEvent(inbound, lead.StageID)); err != nil {
+				h.log.Warn("webhook: событие message не опубликовано",
+					"lead_id", lead.ID, "error", err)
+			}
 		}
 
 		// Сообщение в БД — можно ставить задачу. Дедуп-ключ строится от

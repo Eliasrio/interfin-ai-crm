@@ -23,6 +23,8 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+
+	"github.com/interfin/interfin-ai-crm/internal/models"
 )
 
 // Channel — канал Redis pub/sub для всех real-time событий CRM (§10.1).
@@ -35,6 +37,7 @@ const (
 	TypeManagerEscalation = "manager_escalation" // AQ²-fix #8: 48ч молчания
 	TypePaymentReceived   = "payment_received"   // M6 §3.3: платёж принят; tolerance решил стадию
 	TypeTTLWarning        = "ttl_warning"        // M9: до истечения TTL стадии осталось < kanban.ttl_warning_hours
+	TypeMessage           = "message"            // M12: новая строка в messages (чат живой в обе стороны)
 )
 
 // Event — единица канала crm:events. Одна структура на все типы:
@@ -57,8 +60,36 @@ type Event struct {
 	Currency    string `json:"currency,omitempty"`
 	ToleranceOk *bool  `json:"tolerance_ok,omitempty"`
 
+	// Только для message (M12). Полный текст допустим: канал внутренний
+	// (Redis за паролем, WS за JWT). Событие НЕ трогает stage — StageID выше
+	// заполняется ТЕКУЩЕЙ стадией лида (консистентность карточки на фронте).
+	// Author: '' — лид (inbound), 'bot' — Эмма, 'manager:<id>' — менеджер.
+	Direction string `json:"direction,omitempty"`
+	Author    string `json:"author,omitempty"`
+	Content   string `json:"content,omitempty"`
+
 	Reason string    `json:"reason,omitempty"` // человекочитаемый триггер (лог/отладка)
 	TS     time.Time `json:"ts"`               // клиент хранит как last_event_ts для catch-up §10.3
+}
+
+// MessageEvent собирает событие message из строки messages (M12) — единая
+// точка для всех трёх публикаторов (ingestion, воркер, ручка менеджера).
+// stageID — текущая стадия лида. TS из created_at строки; свежая вставка
+// без отметки — штамп поставит Publish.
+func MessageEvent(m *models.Message, stageID int16) Event {
+	author := ""
+	if m.Author != nil {
+		author = *m.Author
+	}
+	return Event{
+		Type:      TypeMessage,
+		LeadID:    m.LeadID,
+		StageID:   stageID,
+		Direction: m.Direction,
+		Author:    author,
+		Content:   m.Content,
+		TS:        m.CreatedAt,
+	}
 }
 
 // Publisher — контракт публикации для бизнес-логики (в тестах — фейк).

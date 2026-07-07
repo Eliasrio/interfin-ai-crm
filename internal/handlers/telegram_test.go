@@ -14,6 +14,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/interfin/interfin-ai-crm/internal/events"
 	"github.com/interfin/interfin-ai-crm/internal/models"
 	"github.com/interfin/interfin-ai-crm/internal/queue"
 	"github.com/interfin/interfin-ai-crm/internal/repo"
@@ -125,6 +126,10 @@ func (f *fakeMsgs) ListByLead(_ context.Context, _ int64, _ int) ([]models.Messa
 	return nil, nil
 }
 
+func (f *fakeMsgs) ListByLeadBefore(_ context.Context, _, _ int64, _ int) ([]models.Message, error) {
+	return nil, nil
+}
+
 type enqueueCall struct {
 	LeadID int64
 	MsgID  int
@@ -152,11 +157,14 @@ func (d *dispatchRecorder) ServeHTTP(_ http.ResponseWriter, r *http.Request) {
 	d.body, _ = io.ReadAll(r.Body)
 }
 
+// events.Publisher здесь — fakePub из payment_test.go (общий пакет).
+
 type env struct {
 	router   *gin.Engine
 	leads    *fakeLeads
 	msgs     *fakeMsgs
 	queue    *fakeQueue
+	pub      *fakePub
 	dispatch *dispatchRecorder
 }
 
@@ -167,11 +175,12 @@ func newEnv(t *testing.T) *env {
 		leads:    newFakeLeads(),
 		msgs:     &fakeMsgs{},
 		queue:    &fakeQueue{},
+		pub:      &fakePub{},
 		dispatch: &dispatchRecorder{},
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	e.router = gin.New()
-	NewTelegramWebhook(e.leads, e.msgs, e.queue, testSecret, log).
+	NewTelegramWebhook(e.leads, e.msgs, e.queue, e.pub, testSecret, log).
 		Register(e.router, e.dispatch)
 	return e
 }
@@ -215,7 +224,7 @@ func TestSecretToken_EmptyConfiguredSecretRejectsAll(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	router := gin.New()
-	NewTelegramWebhook(newFakeLeads(), &fakeMsgs{}, &fakeQueue{}, "", log).
+	NewTelegramWebhook(newFakeLeads(), &fakeMsgs{}, &fakeQueue{}, &fakePub{}, "", log).
 		Register(router, &dispatchRecorder{})
 
 	req := httptest.NewRequest(http.MethodPost, "/webhook/telegram", bytes.NewBufferString(updateJSON(1, 1, "x")))
@@ -267,6 +276,17 @@ func TestSaveAndReturn200_NewLead(t *testing.T) {
 	}
 	if e.queue.calls[0] != (enqueueCall{LeadID: lead.ID, MsgID: 1001}) {
 		t.Errorf("enqueue с неверными аргументами: %+v", e.queue.calls[0])
+	}
+
+	// M12: inbound ушёл событием message (чат менеджера живой в обе стороны).
+	if len(e.pub.events) != 1 {
+		t.Fatalf("ожидали одно событие message, опубликовано %d", len(e.pub.events))
+	}
+	ev := e.pub.events[0]
+	if ev.Type != events.TypeMessage || ev.LeadID != lead.ID ||
+		ev.Direction != models.DirectionInbound || ev.Author != "" ||
+		ev.Content != "Привет, хочу открыть счёт" || ev.StageID != lead.StageID {
+		t.Errorf("событие message собрано неверно: %+v", ev)
 	}
 
 	// Тело дошло до финального звена (telebot) восстановленным.

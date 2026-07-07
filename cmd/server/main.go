@@ -221,6 +221,7 @@ func run(log *slog.Logger) error {
 			SummaryEnq:    q,
 			SummaryEveryN: cfg.Kanban.SummaryEveryNMessages,
 			Kanban:        machine,
+			Pub:           pub, // M12: событие message на каждый outbound Эммы
 			Log:           log,
 		}),
 		summarizer,
@@ -262,7 +263,7 @@ func run(log *slog.Logger) error {
 		Redis:    redisPinger{client: rdb},
 	}, log)
 
-	handlers.NewTelegramWebhook(leads, msgs, q, cfg.Telegram.WebhookSecret, log).
+	handlers.NewTelegramWebhook(leads, msgs, q, pub, cfg.Telegram.WebhookSecret, log).
 		Register(router, telegram.NewDispatcher(bot))
 
 	// --- M7: аутентификация — JWT RS256 + refresh (§5.1) ---
@@ -321,6 +322,16 @@ func run(log *slog.Logger) error {
 		Msgs:     msgs,
 		Payments: payments,
 		Salt:     cfg.LGPD.ErasureSalt,
+		Log:      log,
+	}).Register(api)
+	// --- M12: чат менеджера и счёт из карточки — тот же Sender, что у
+	// воркера M3, и клиент Crypto Pay контура M6 (payload=lead_id).
+	handlers.NewChat(handlers.ChatDeps{
+		Leads:    leads,
+		Msgs:     msgs,
+		Sender:   sender,
+		Invoices: payment.NewClient(cfg.Payment),
+		Pub:      pub,
 		Log:      log,
 	}).Register(api)
 	log.Info("rest api registered",
