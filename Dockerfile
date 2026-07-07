@@ -6,13 +6,19 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -o /out/server ./cmd/server \
- && CGO_ENABLED=0 go build -o /out/migrate ./cmd/migrate
+ && CGO_ENABLED=0 go build -o /out/migrate ./cmd/migrate \
+ && CGO_ENABLED=0 go build -o /out/create-manager ./cmd/create-manager \
+ && CGO_ENABLED=0 go build -o /out/index-kb ./cmd/index-kb
 
 FROM alpine:3.19
 RUN adduser -D -u 10001 app
 WORKDIR /app
 COPY --from=build /out/server /app/server
 COPY --from=build /out/migrate /app/migrate
+# M11: ops-утилиты для боевого сервера (one-off запуск на сети стека):
+# бутстрап учётки менеджера и индексация базы знаний RAG.
+COPY --from=build /out/create-manager /app/create-manager
+COPY --from=build /out/index-kb /app/index-kb
 COPY config/config.yaml /app/config/config.yaml
 COPY migrations /app/migrations
 # M11: мост «Docker secrets → env» для prod (dev без секрета app_env — no-op).
