@@ -114,7 +114,10 @@ rm -rf secrets/
 # 3) app_env — все секретные env приложения одним файлом:
 cat > app.env <<'ENV'
 POSTGRES_DSN=postgres://crm:<PG_CRM>@pgbouncer:6432/interfin?sslmode=disable
+REDIS_ADDR=redis-master:6379
 REDIS_PASSWORD=<REDIS_PASS>
+JWT_PRIVATE_KEY_PATH=/run/secrets/jwt_private
+JWT_PUBLIC_KEY_PATH=/run/secrets/jwt_public
 TELEGRAM_BOT_TOKEN=<токен боевого бота>
 TELEGRAM_WEBHOOK_SECRET=<openssl rand -hex 32>
 TELEGRAM_WEBHOOK_URL=https://crm.<домен>/webhook/telegram
