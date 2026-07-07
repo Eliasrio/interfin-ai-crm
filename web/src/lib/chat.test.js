@@ -114,6 +114,24 @@ describe('live-события message', () => {
     chat.applyEvent({ type: 'message', lead_id: 7, direction: 'inbound', content: 'да', ts: 't2' })
     expect(chat.getState().messages).toHaveLength(4)
   })
+
+  it('эхо ОБГОНЯЕТ ответ ручки (боевой баг): пузырь один и получает id', async () => {
+    mockFetch([
+      {
+        match: (u, o) => u.includes('/messages') && o.method === 'POST',
+        reply: { body: { message: msg(10, 'outbound', 'manager:1', 'обгон') } },
+      },
+      { match: (u) => u.includes('/messages'), reply: { body: { messages: [] } } },
+    ])
+    const inflight = chat.send('обгон')
+    // WS-эхо прилетает, пока POST ещё в полёте.
+    chat.applyEvent({ type: 'message', lead_id: 7, direction: 'outbound', author: 'manager:1', content: 'обгон', ts: 't' })
+    await inflight
+
+    const bubbles = chat.getState().messages.filter((m) => m.content === 'обгон')
+    expect(bubbles).toHaveLength(1)
+    expect(bubbles[0].id).toBe(10) // live-пузырь поднят до строки с id
+  })
 })
 
 describe('reconnect/polling', () => {

@@ -95,7 +95,11 @@ export async function loadOlder() {
 
 // send — реплика менеджера. Бэкенд шлёт в Telegram и только при успехе
 // пишет строку (502 ERR_TELEGRAM_SEND — в истории её нет); ответ ручки —
-// готовое сообщение с id, добавляем его сами, а WS-эхо гасим pendingSent.
+// готовое сообщение с id. WS-эхо о том же сообщении гасится в ОБОИХ
+// порядках прихода (боевой баг M12: эхо часто обгоняет HTTP-ответ):
+//   эхо позже ответа  → pendingSent, applyEvent его глотает;
+//   эхо раньше ответа → live-пузырь уже в списке, ответ ручки не
+//     добавляет второй, а поднимает live-пузырь до строки с id.
 export async function send(text) {
   const { leadId, sending } = state
   if (!leadId || sending) return
@@ -103,6 +107,19 @@ export async function send(text) {
   try {
     const { message } = await api.postMessage(leadId, text)
     if (state.leadId !== leadId) return
+    const echoAt = state.messages.findLastIndex(
+      (m) =>
+        m.id == null &&
+        m.direction === message.direction &&
+        (m.author || null) === (message.author || null) &&
+        m.content === message.content,
+    )
+    if (echoAt >= 0) {
+      const messages = [...state.messages]
+      messages[echoAt] = message
+      commit({ ...state, messages, sending: false })
+      return
+    }
     pendingSent = [...pendingSent.slice(-19), message.content]
     commit({ ...state, messages: [...state.messages, message], sending: false })
   } catch (err) {
