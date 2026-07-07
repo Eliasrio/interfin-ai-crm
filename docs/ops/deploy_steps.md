@@ -204,10 +204,16 @@ docker stack deploy -c docker-compose.prod.yml crm
 watch docker service ls        # ждать: все 1/1 и 2/2 (первый раз 2–3 мин)
 
 # миграции — суперпользователем, напрямую в postgres (мимо pgbouncer),
-# один раз (CREATE EXTENSION vector требует суперпользователя):
-docker run --rm --network crm_backend \
+# один раз (CREATE EXTENSION vector требует суперпользователя).
+# ВАЖНО: НЕ docker run --network crm_backend — overlay-сети стека не
+# attachable, Swarm не пустит внешний контейнер (поймано при первом боевом
+# деплое). Выполняем внутри работающего контейнера app:
+docker exec \
   -e POSTGRES_DSN='postgres://postgres:<PG_SUPER>@postgres-primary:5432/interfin?sslmode=disable' \
-  interfin-crm/app:latest /app/migrate up
+  $(docker ps -qf name=crm_app | head -1) /app/migrate up
+
+# app стартовал раньше миграций — перезапустить начисто (rolling, без даунтайма):
+docker service update --force crm_app
 
 # первый base-бэкап wal-g (дальше по расписанию/вручную):
 docker exec -u postgres $(docker ps -qf name=crm_postgres-primary) \
@@ -222,18 +228,21 @@ docker exec -u postgres $(docker ps -qf name=crm_postgres-primary) \
 
 ## Фаза 8. Первичные данные (15 мин)
 
+Обе утилиты выполняются внутри работающего контейнера app (сеть стека не
+attachable для docker run; POSTGRES_DSN и VOYAGE_API_KEY в контейнере уже
+есть из app_env):
+
 ```bash
 # учётка администратора доски (пароль спросит интерактивно):
-docker run --rm -it --network crm_backend \
-  -e POSTGRES_DSN='postgres://crm:<PG_CRM>@pgbouncer:6432/interfin?sslmode=disable' \
-  interfin-crm/app:latest /app/create-manager -email admin@<домен> -role admin
+docker exec -it $(docker ps -qf name=crm_app | head -1) \
+  /app/create-manager -email admin@<домен> -role admin
 
-# база знаний RAG: наполнить docs/kb боевыми .md-документами, затем:
-docker run --rm --network crm_backend \
-  -v $PWD/docs/kb:/kb:ro \
-  -e POSTGRES_DSN='postgres://crm:<PG_CRM>@pgbouncer:6432/interfin?sslmode=disable' \
-  -e VOYAGE_API_KEY='<prod-ключ>' \
-  interfin-crm/app:latest /app/index-kb -dir /kb
+# база знаний RAG: наполнить docs/kb боевыми .md-документами, затем
+# скопировать в контейнер и проиндексировать:
+APP=$(docker ps -qf name=crm_app | head -1)
+docker cp docs/kb "$APP":/tmp/kb
+docker exec "$APP" /app/index-kb -dir /tmp/kb
+docker exec "$APP" rm -rf /tmp/kb
 ```
 
 После наполнения реальной базы знаний откалибровать порог RAG
