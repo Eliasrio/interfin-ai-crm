@@ -311,8 +311,12 @@ services:
   redis-exporter:
     image: oliver006/redis_exporter:v1.61.0
     environment:
-      REDIS_PASSWORD_FILE: /run/secrets/redis_password
-    secrets: [redis_password]
+      # ВАЖНО: REDIS_PASSWORD_FILE — НЕ голый пароль, а JSON-карта
+      # {"redis://host:port":"pass", ...} (поймано при первом боевом деплое:
+      # plain-строка валит экспортер fatal'ом «invalid character ... after
+      # top-level value»). Сентинелов в карте нет — они без auth.
+      REDIS_PASSWORD_FILE: /run/secrets/redis_exporter_passwords
+    secrets: [redis_exporter_passwords]
     networks:
       - backend
       - monitoring
@@ -368,6 +372,8 @@ secrets:
   pgbouncer_userlist:
     external: true
   redis_password:
+    external: true
+  redis_exporter_passwords:
     external: true
   alertmanager_yml:
     external: true

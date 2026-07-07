@@ -145,12 +145,18 @@ docker secret create walg_env walg.env && shred -u walg.env
 cp ops/alertmanager/alertmanager.yml.example alertmanager.yml
 nano alertmanager.yml    # bot_token, chat_id
 docker secret create alertmanager_yml alertmanager.yml && shred -u alertmanager.yml
+
+# 6) redis_exporter: JSON-карта паролей (НЕ голая строка — формат
+#    redis_exporter REDIS_PASSWORD_FILE; сентинелы без auth, их в карте нет).
+#    Пароль спросится с клавиатуры (тот же REDIS_PASS):
+read -s RP && printf '{"redis://redis-master:6379":"%s","redis://redis-replica-1:6379":"%s","redis://redis-replica-2:6379":"%s"}' "$RP" "$RP" "$RP" \
+  | docker secret create redis_exporter_passwords - && unset RP
 ```
 
-Секрет №10 (`pgbouncer_userlist`) создаётся в фазе 6 — ему нужны
+Секрет №11 (`pgbouncer_userlist`) создаётся в фазе 6 — ему нужны
 SCRAM-верификаторы из работающего Postgres.
 
-✅ `docker secret ls` — 9 секретов.
+✅ `docker secret ls` — 10 секретов.
 
 ## Фаза 6. Инициализация БД и pgbouncer_userlist (20 мин)
 
