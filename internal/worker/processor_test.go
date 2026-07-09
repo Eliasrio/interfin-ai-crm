@@ -97,7 +97,37 @@ func (f *fakeLeads) UpdateFields(_ context.Context, id int64, fields map[string]
 	if v, ok := fields["last_activity_at"]; ok { // M5: ResetTTL (IQ-4)
 		lead.LastActivityAt = v.(time.Time)
 	}
+	if v, ok := fields["dialog_mode"]; ok { // M13: takeover
+		lead.DialogMode = v.(string)
+	}
+	if v, ok := fields["bot_silenced_until"]; ok { // M13: пауза автопилота
+		if v == nil {
+			lead.BotSilencedUntil = nil
+		} else {
+			ts := v.(time.Time)
+			lead.BotSilencedUntil = &ts
+		}
+	}
+	if v, ok := fields["taken_by"]; ok { // M13: кто взял диалог
+		if v == nil {
+			lead.TakenBy = nil
+		} else {
+			id := v.(int64)
+			lead.TakenBy = &id
+		}
+	}
 	return nil
+}
+
+// setMode — тестовый крючок M13: смена режима лида «из другой вкладки»
+// (в т.ч. из хука fakeAI.onComplete — гонка BUG-01).
+func (f *fakeLeads) setMode(id int64, mode string, silencedUntil *time.Time) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if lead, ok := f.leads[id]; ok {
+		lead.DialogMode = mode
+		lead.BotSilencedUntil = silencedUntil
+	}
 }
 
 func (f *fakeLeads) TransitionStage(_ context.Context, id int64, from, to int16) (bool, error) {
@@ -142,6 +172,20 @@ func (f *fakeMsgs) CreateOutbound(_ context.Context, m *models.Message) error {
 
 func (f *fakeMsgs) ListByLeadBefore(ctx context.Context, leadID, _ int64, limit int) ([]models.Message, error) {
 	return f.ListByLead(ctx, leadID, limit)
+}
+
+// HasManagerOutboundAfter зеркалит боевой запрос (M13): outbound менеджера
+// с id > afterID.
+func (f *fakeMsgs) HasManagerOutboundAfter(_ context.Context, leadID, afterID int64) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, m := range f.history {
+		if m.LeadID == leadID && m.ID > afterID && m.Direction == models.DirectionOutbound &&
+			m.Author != nil && strings.HasPrefix(*m.Author, models.AuthorManagerPrefix) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (f *fakeMsgs) ListByLead(_ context.Context, leadID int64, limit int) ([]models.Message, error) {
@@ -197,22 +241,27 @@ func (f *fakeSender) sentCount() int {
 }
 
 type fakeAI struct {
-	mu      sync.Mutex
-	calls   int
-	reply   string
-	err     error
-	systems []string // system-промпты входящих вызовов (проверка RAG/summary M4)
+	mu         sync.Mutex
+	calls      int
+	reply      string
+	err        error
+	systems    []string // system-промпты входящих вызовов (проверка RAG/summary M4)
+	onComplete func()   // M13: крючок «во время генерации» (гонка BUG-01)
 }
 
 func (f *fakeAI) Complete(_ context.Context, system string, _ []claude.Message) (string, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.calls++
 	f.systems = append(f.systems, system)
-	if f.err != nil {
-		return "", f.err
+	hook, err, reply := f.onComplete, f.err, f.reply
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
 	}
-	return f.reply, nil
+	if err != nil {
+		return "", err
+	}
+	return reply, nil
 }
 
 func (f *fakeAI) callCount() int {

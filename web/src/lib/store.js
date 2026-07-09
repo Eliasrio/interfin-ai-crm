@@ -153,6 +153,19 @@ export function applyEvent(ev) {
       upd.ttlWarning = true
       addAlert('warn', `TTL скоро истечёт: ${who}`)
       break
+    case 'dialog_mode':
+      // M13: событие несёт состояние режима целиком.
+      upd.dialog_mode = ev.mode
+      upd.bot_silenced_until = ev.silenced_until ?? null
+      upd.taken_by = ev.taken_by ?? null
+      if (ev.reason === 'takeover_pickup') {
+        addAlert('warn', `Эмма подхватила диалог: ${who} (менеджер не ответил)`)
+      }
+      break
+    case 'takeover_reminder':
+      // M13: клиент ждёт ответа менеджера.
+      addAlert('warn', `${who} ждёт ответа ${ev.waiting_minutes} мин — ответьте или Эмма подхватит`)
+      break
     default:
       // Неизвестный тип события — вперёд-совместимость: молча пропускаем.
       commit({ ...state, lastEventTs })

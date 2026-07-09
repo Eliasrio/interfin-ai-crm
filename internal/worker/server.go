@@ -115,6 +115,14 @@ func (s *Server) RegisterLGPD(h *LGPDHandlers) {
 	s.mux.HandleFunc(queue.TypeLGPDRetention, h.HandleLGPDRetention)
 }
 
+// RegisterTakeover подключает обработчики M13: takeover:reminder
+// (напоминание менеджеру) и takeover:pickup (Эмма подхватывает диалог).
+// Зовётся до Start.
+func (s *Server) RegisterTakeover(h *TakeoverHandlers) {
+	s.mux.HandleFunc(queue.TypeTakeoverReminder, h.HandleReminder)
+	s.mux.HandleFunc(queue.TypeTakeoverPickup, h.HandlePickup)
+}
+
 // Start запускает воркер (неблокирующе — asynq.Server.Start).
 func (s *Server) Start() error {
 	if err := s.srv.Start(s.mux); err != nil {

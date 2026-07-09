@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -27,6 +28,7 @@ import (
 	"github.com/interfin/interfin-ai-crm/internal/lgpd"
 	"github.com/interfin/interfin-ai-crm/internal/models"
 	"github.com/interfin/interfin-ai-crm/internal/repo"
+	"github.com/interfin/interfin-ai-crm/internal/settings"
 )
 
 // --- in-memory хранилище, разделяемое фейками репозиториев ---
@@ -61,8 +63,39 @@ func (f *apiLeads) GetByTelegramUserID(context.Context, int64) (*models.Lead, er
 	panic("не зовётся из /api")
 }
 func (f *apiLeads) Save(context.Context, *models.Lead) error { panic("не зовётся из /api") }
-func (f *apiLeads) UpdateFields(context.Context, int64, map[string]interface{}) error {
-	panic("не зовётся из /api")
+
+// UpdateFields зеркалит боевой leadRepo для полей M13 (режим диалога и пауза
+// автопилота — ручка mode и автопилот чата); стёртый лид → ErrNotFound,
+// как RowsAffected=0 у боевого (soft-delete-скоуп).
+func (f *apiLeads) UpdateFields(_ context.Context, id int64, fields map[string]interface{}) error {
+	f.s.mu.Lock()
+	defer f.s.mu.Unlock()
+	lead, ok := f.s.leads[id]
+	if !ok || lead.DeletedAt.Valid {
+		return repo.ErrNotFound
+	}
+	if v, ok := fields["dialog_mode"]; ok {
+		lead.DialogMode = v.(string)
+	}
+	if v, ok := fields["bot_silenced_until"]; ok {
+		if v == nil {
+			lead.BotSilencedUntil = nil
+		} else {
+			ts := v.(time.Time)
+			lead.BotSilencedUntil = &ts
+		}
+	}
+	if v, ok := fields["taken_by"]; ok {
+		switch id := v.(type) {
+		case nil:
+			lead.TakenBy = nil
+		case *int64:
+			lead.TakenBy = id
+		case int64:
+			lead.TakenBy = &id
+		}
+	}
+	return nil
 }
 func (f *apiLeads) TransitionStage(context.Context, int64, int16, int16) (bool, error) {
 	panic("не зовётся из /api (переходы — через StageMachine)")
@@ -126,6 +159,20 @@ func (f *apiMsgs) ListByLead(_ context.Context, leadID int64, _ int) ([]models.M
 	f.s.mu.Lock()
 	defer f.s.mu.Unlock()
 	return append([]models.Message(nil), f.s.msgs[leadID]...), nil
+}
+
+// HasManagerOutboundAfter зеркалит боевой запрос (M13, зовёт только воркер;
+// ручки /api им не пользуются, метод — для полноты контракта).
+func (f *apiMsgs) HasManagerOutboundAfter(_ context.Context, leadID, afterID int64) (bool, error) {
+	f.s.mu.Lock()
+	defer f.s.mu.Unlock()
+	for _, m := range f.s.msgs[leadID] {
+		if m.ID > afterID && m.Direction == models.DirectionOutbound &&
+			m.Author != nil && strings.HasPrefix(*m.Author, models.AuthorManagerPrefix) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // ListByLeadBefore зеркалит боевую пагинацию: последние limit с id < beforeID
@@ -267,6 +314,7 @@ type apiRig struct {
 	sender   *chatSender
 	invoices *chatInvoices
 	pub      *fakePub
+	settings *settings.Service // M13: боевой сервис поверх фейкового репо
 }
 
 func newAPIRig(t *testing.T, leads ...*models.Lead) *apiRig {
@@ -305,6 +353,9 @@ func newAPIRig(t *testing.T, leads ...*models.Lead) *apiRig {
 		Salt:     "test-salt",
 		Log:      log,
 	}).Register(api)
+	// M13: настройки — боевой settings.Service поверх in-memory репозитория
+	// (кэш и валидация — часть контракта).
+	settingsSvc := settings.New(&apiSettingsRepo{values: map[string]string{}})
 	// M12: чат и счёт — как в cmd/server, на той же группе.
 	NewChat(ChatDeps{
 		Leads:    &apiLeads{s: store},
@@ -312,8 +363,12 @@ func newAPIRig(t *testing.T, leads ...*models.Lead) *apiRig {
 		Sender:   sender,
 		Invoices: invoices,
 		Pub:      pub,
+		Settings: settingsSvc, // M13: автопилот hybrid
 		Log:      log,
 	}).Register(api)
+	// M13: режим диалога и настройки — как в cmd/server.
+	NewTakeover(TakeoverDeps{Leads: &apiLeads{s: store}, Pub: pub, Log: log}).Register(api)
+	NewSettings(SettingsDeps{Svc: settingsSvc, Log: log}).Register(api)
 
 	return &apiRig{
 		router:   r,
@@ -324,7 +379,31 @@ func newAPIRig(t *testing.T, leads ...*models.Lead) *apiRig {
 		sender:   sender,
 		invoices: invoices,
 		pub:      pub,
+		settings: settingsSvc,
 	}
+}
+
+// apiSettingsRepo — in-memory repo.SettingsRepo для рига.
+type apiSettingsRepo struct {
+	mu     sync.Mutex
+	values map[string]string
+}
+
+func (f *apiSettingsRepo) Get(_ context.Context, key string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	v, ok := f.values[key]
+	if !ok {
+		return "", repo.ErrNotFound
+	}
+	return v, nil
+}
+
+func (f *apiSettingsRepo) Set(_ context.Context, key, value string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.values[key] = value
+	return nil
 }
 
 func (rig *apiRig) do(t *testing.T, method, path, token string, body any) *httptest.ResponseRecorder {
@@ -391,6 +470,7 @@ func testLead(id int64, stage int16) *models.Lead {
 		ID: id, TelegramUserID: 1000 + id, Name: strPtr("Иван"),
 		Phone: strPtr("+5521999999999"), TgUsername: strPtr("ivan"),
 		StageID: stage, MessageCount: 3,
+		DialogMode:     models.DialogModeBot, // зеркалит DEFAULT 'bot' (0013)
 		LastActivityAt: time.Now().Add(-time.Hour), CreatedAt: time.Now().Add(-24 * time.Hour),
 	}
 }

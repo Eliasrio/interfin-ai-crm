@@ -98,6 +98,9 @@ export function makeLead(overrides = {}) {
     message_count: 3,
     anti_spam_count: 0,
     manual_resolution: false,
+    dialog_mode: 'bot', // M13: зеркалит DEFAULT 'bot' в DTO
+    bot_silenced_until: null,
+    taken_by: null,
     last_activity_at: new Date().toISOString(),
     created_at: new Date().toISOString(),
     ...overrides,

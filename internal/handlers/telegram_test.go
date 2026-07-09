@@ -130,6 +130,10 @@ func (f *fakeMsgs) ListByLeadBefore(_ context.Context, _, _ int64, _ int) ([]mod
 	return nil, nil
 }
 
+func (f *fakeMsgs) HasManagerOutboundAfter(context.Context, int64, int64) (bool, error) {
+	return false, nil // контур takeover (M13) в тестах вебхука не участвует
+}
+
 type enqueueCall struct {
 	LeadID int64
 	MsgID  int

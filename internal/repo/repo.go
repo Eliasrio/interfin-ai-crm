@@ -72,6 +72,11 @@ type MessageRepo interface {
 	// сообщений с id < beforeID (0 — просто последние), от старых к новым.
 	// Прокрутка вверх: клиент передаёт id старейшего загруженного сообщения.
 	ListByLeadBefore(ctx context.Context, leadID, beforeID int64, limit int) ([]models.Message, error)
+	// HasManagerOutboundAfter — ответил ли менеджер лиду ПОСЛЕ сообщения
+	// afterID: есть outbound с author 'manager:%' и id > afterID (M13,
+	// no-op-проверка напоминаний/подхвата — смотрит на факт ответа, а не на
+	// конкретный message_id, поэтому устаревшие задачи гаснут сами).
+	HasManagerOutboundAfter(ctx context.Context, leadID, afterID int64) (bool, error)
 }
 
 // ListLeadsParams — параметры LeadRepo.List. Limit <= 0 недопустим
@@ -105,6 +110,16 @@ type LGPDRepo interface {
 	// payment_events выживают с lead_id=NULL (FK SET NULL, миграция 0010).
 	// Возвращает число удалённых лидов.
 	DeleteErasedBefore(ctx context.Context, cutoff time.Time) (int64, error)
+}
+
+// SettingsRepo — settings (M13, 0014): переопределения настроек CRM.
+// Дефолты и типизация значений живут выше, в internal/settings.
+type SettingsRepo interface {
+	// Get возвращает значение ключа. ErrNotFound — переопределения нет
+	// (вызывающий подставляет дефолт).
+	Get(ctx context.Context, key string) (string, error)
+	// Set создаёт или перезаписывает значение ключа (upsert).
+	Set(ctx context.Context, key, value string) error
 }
 
 // PaymentRepo — payment_events (§8.3).

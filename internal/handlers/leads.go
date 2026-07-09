@@ -71,6 +71,9 @@ type leadDTO struct {
 	ManualResolution bool       `json:"manual_resolution"`
 	EscalatedAt      *time.Time `json:"escalated_at,omitempty"`
 	ConsentGivenAt   *time.Time `json:"consent_given_at,omitempty"`
+	DialogMode       string     `json:"dialog_mode"`                  // M13: bot | human
+	BotSilencedUntil *time.Time `json:"bot_silenced_until,omitempty"` // M13: пауза автопилота
+	TakenBy          *int64     `json:"taken_by,omitempty"`           // M13: кто взял диалог
 	LastActivityAt   time.Time  `json:"last_activity_at"`
 	CreatedAt        time.Time  `json:"created_at"`
 }
@@ -88,6 +91,9 @@ func toLeadDTO(l *models.Lead) leadDTO {
 		ManualResolution: l.ManualResolution,
 		EscalatedAt:      l.EscalatedAt,
 		ConsentGivenAt:   l.ConsentGivenAt,
+		DialogMode:       l.DialogMode,
+		BotSilencedUntil: l.BotSilencedUntil,
+		TakenBy:          l.TakenBy,
 		LastActivityAt:   l.LastActivityAt,
 		CreatedAt:        l.CreatedAt,
 	}

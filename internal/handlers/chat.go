@@ -32,6 +32,7 @@ import (
 	"github.com/interfin/interfin-ai-crm/internal/models"
 	"github.com/interfin/interfin-ai-crm/internal/payment"
 	"github.com/interfin/interfin-ai-crm/internal/repo"
+	"github.com/interfin/interfin-ai-crm/internal/settings"
 )
 
 // maxMessageRunes — лимит длины текстового сообщения Telegram (4096 символов).
@@ -64,6 +65,10 @@ type ChatDeps struct {
 	Sender   TelegramSender
 	Invoices InvoiceCreator
 	Pub      events.Publisher
+	// Settings — M13 (автопилот hybrid): после успешной реплики менеджера
+	// при dialog_mode='bot' Эмма ставится на паузу hybrid_pause_minutes.
+	// nil — автопилот выключен (старые тесты M12).
+	Settings settings.Reader
 	Log      *slog.Logger
 }
 
@@ -165,6 +170,7 @@ func (h *ChatHandler) postMessage(c *gin.Context) {
 	if !ok {
 		return
 	}
+	h.pauseBotAfterManagerReply(c, lead)
 	c.JSON(http.StatusOK, gin.H{"message": toMessageDTO(msg)})
 }
 
@@ -239,7 +245,34 @@ func (h *ChatHandler) postInvoice(c *gin.Context) {
 	if _, ok := h.saveOutbound(c, lead, text); !ok {
 		return
 	}
+	h.pauseBotAfterManagerReply(c, lead)
 	c.JSON(http.StatusOK, gin.H{"invoice_id": inv.InvoiceID, "url": inv.BotInvoiceURL})
+}
+
+// pauseBotAfterManagerReply — автопилот hybrid (M13 §4): менеджер ответил
+// из карточки при dialog_mode='bot' → Эмма молчит hybrid_pause_minutes
+// (не перебивает живой разговор), затем включается сама. В режиме human
+// пауза не трогается — там Эмму глушит сам режим. Best effort ПОСЛЕ
+// доставки: реплика уже у клиента, ошибка паузы бизнес-ответ не роняет.
+func (h *ChatHandler) pauseBotAfterManagerReply(c *gin.Context, lead *models.Lead) {
+	if h.deps.Settings == nil || lead.DialogMode != models.DialogModeBot {
+		return
+	}
+	ctx := c.Request.Context()
+	pause := time.Duration(h.deps.Settings.Minutes(ctx, settings.KeyHybridPauseMinutes)) * time.Minute
+	until := time.Now().UTC().Add(pause)
+	if err := h.deps.Leads.UpdateFields(ctx, lead.ID,
+		map[string]interface{}{"bot_silenced_until": until}); err != nil {
+		h.deps.Log.Error("chat: пауза автопилота не выставлена",
+			"lead_id", lead.ID, "error", err)
+		return
+	}
+	lead.BotSilencedUntil = &until
+	if err := h.deps.Pub.Publish(ctx,
+		events.DialogModeEvent(lead, "autopilot pause after manager reply")); err != nil {
+		h.deps.Log.Warn("chat: событие dialog_mode не опубликовано",
+			"lead_id", lead.ID, "error", err)
+	}
 }
 
 // invoiceMessage — короткий текст от Эммы со ссылкой на оплату (task M12 §4).

@@ -38,6 +38,8 @@ const (
 	TypePaymentReceived   = "payment_received"   // M6 §3.3: платёж принят; tolerance решил стадию
 	TypeTTLWarning        = "ttl_warning"        // M9: до истечения TTL стадии осталось < kanban.ttl_warning_hours
 	TypeMessage           = "message"            // M12: новая строка в messages (чат живой в обе стороны)
+	TypeDialogMode        = "dialog_mode"        // M13: смена режима диалога (bot/human/пауза автопилота)
+	TypeTakeoverReminder  = "takeover_reminder"  // M13: клиент ждёт ответа менеджера reminder_minutes
 )
 
 // Event — единица канала crm:events. Одна структура на все типы:
@@ -68,6 +70,16 @@ type Event struct {
 	Author    string `json:"author,omitempty"`
 	Content   string `json:"content,omitempty"`
 
+	// Только для dialog_mode (M13): текущее состояние режима целиком —
+	// клиент не собирает его из дельт. Reason="takeover_pickup" помечает
+	// подхват Эммы (фронт показывает тост).
+	Mode          string     `json:"mode,omitempty"`           // bot | human
+	SilencedUntil *time.Time `json:"silenced_until,omitempty"` // пауза автопилота (mode=bot)
+	TakenBy       *int64     `json:"taken_by,omitempty"`       // менеджер, взявший диалог (mode=human)
+
+	// Только для takeover_reminder (M13).
+	WaitingMinutes int `json:"waiting_minutes,omitempty"` // сколько минут клиент ждёт ответа
+
 	Reason string    `json:"reason,omitempty"` // человекочитаемый триггер (лог/отладка)
 	TS     time.Time `json:"ts"`               // клиент хранит как last_event_ts для catch-up §10.3
 }
@@ -89,6 +101,25 @@ func MessageEvent(m *models.Message, stageID int16) Event {
 		Author:    author,
 		Content:   m.Content,
 		TS:        m.CreatedAt,
+	}
+}
+
+// ReasonTakeoverPickup — Reason события dialog_mode при автоподхвате Эммой
+// (M13): фронт отличает его от ручного «Вернуть Эмме» и показывает тост.
+const ReasonTakeoverPickup = "takeover_pickup"
+
+// DialogModeEvent собирает событие dialog_mode из актуального лида (M13) —
+// единая точка для всех публикаторов (ручка режима, автопилот, подхват).
+// Событие несёт состояние целиком: mode + silenced_until + taken_by.
+func DialogModeEvent(l *models.Lead, reason string) Event {
+	return Event{
+		Type:          TypeDialogMode,
+		LeadID:        l.ID,
+		StageID:       l.StageID,
+		Mode:          l.DialogMode,
+		SilencedUntil: l.BotSilencedUntil,
+		TakenBy:       l.TakenBy,
+		Reason:        reason,
 	}
 }
 

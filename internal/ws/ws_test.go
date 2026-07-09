@@ -131,6 +131,10 @@ func (wsMsgs) ListByLeadBefore(context.Context, int64, int64, int) ([]models.Mes
 	return nil, nil
 }
 
+func (wsMsgs) HasManagerOutboundAfter(context.Context, int64, int64) (bool, error) {
+	return false, nil // контур takeover (M13) в WS-тестах не участвует
+}
+
 type noopTTL struct{}
 
 func (noopTTL) Schedule(context.Context, int64, time.Duration) error { return nil }

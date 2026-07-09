@@ -35,6 +35,7 @@ import (
 	"github.com/interfin/interfin-ai-crm/internal/rag"
 	"github.com/interfin/interfin-ai-crm/internal/repo"
 	"github.com/interfin/interfin-ai-crm/internal/server"
+	"github.com/interfin/interfin-ai-crm/internal/settings"
 	"github.com/interfin/interfin-ai-crm/internal/telegram"
 	"github.com/interfin/interfin-ai-crm/internal/worker"
 	"github.com/interfin/interfin-ai-crm/internal/ws"
@@ -95,6 +96,8 @@ func run(log *slog.Logger) error {
 	knowledge, summaries, ragAudit := repo.NewRAG(gormDB)
 	managers, refreshTokens := repo.NewAuth(gormDB)
 	lgpdRepo := repo.NewLGPD(gormDB)
+	// M13: настройки CRM (таблица 0014) с кэшем 30с — интервалы takeover.
+	settingsSvc := settings.New(repo.NewSettings(gormDB))
 
 	// --- Redis: одиночный (dev) или Sentinel (prod), по конфигу ---
 	var rdb redis.UniversalClient
@@ -221,7 +224,9 @@ func run(log *slog.Logger) error {
 			SummaryEnq:    q,
 			SummaryEveryN: cfg.Kanban.SummaryEveryNMessages,
 			Kanban:        machine,
-			Pub:           pub, // M12: событие message на каждый outbound Эммы
+			Pub:           pub,         // M12: событие message на каждый outbound Эммы
+			Settings:      settingsSvc, // M13: интервалы контура takeover
+			TakeoverEnq:   q,           // M13: напоминание при молчащей Эмме
 			Log:           log,
 		}),
 		summarizer,
@@ -232,6 +237,18 @@ func run(log *slog.Logger) error {
 	wrk.RegisterKanban(worker.NewKanbanHandlers(machine, log))
 	// M8 §9.1: retention-cron — обработчик и суточный планировщик.
 	wrk.RegisterLGPD(worker.NewLGPDHandlers(lgpdRepo, cfg.LGPD.RetentionDays, log))
+	// M13: напоминания об ожидающих клиентах и подхват Эммы (LOGIC-01).
+	wrk.RegisterTakeover(worker.NewTakeoverHandlers(worker.TakeoverDeps{
+		Leads:         leads,
+		Msgs:          msgs,
+		Settings:      settingsSvc,
+		Enq:           q,
+		InboundEnq:    q,
+		Sender:        sender,
+		ManagerChatID: cfg.Telegram.ManagerChatID,
+		Pub:           pub,
+		Log:           log,
+	}))
 	if err := wrk.Start(); err != nil {
 		return err
 	}
@@ -332,8 +349,14 @@ func run(log *slog.Logger) error {
 		Sender:   sender,
 		Invoices: payment.NewClient(cfg.Payment),
 		Pub:      pub,
+		Settings: settingsSvc, // M13: автопилот hybrid — пауза после реплики
 		Log:      log,
 	}).Register(api)
+	// --- M13: human takeover — режим диалога и настройки интервалов ---
+	handlers.NewTakeover(handlers.TakeoverDeps{Leads: leads, Pub: pub, Log: log}).
+		Register(api)
+	handlers.NewSettings(handlers.SettingsDeps{Svc: settingsSvc, Log: log}).
+		Register(api)
 	log.Info("rest api registered",
 		"rate_limit_per_min", cfg.Server.RateLimitPerMin,
 		"lgpd_retention_days", cfg.LGPD.RetentionDays)

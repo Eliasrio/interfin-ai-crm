@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/hibiken/asynq"
 
@@ -25,6 +26,7 @@ import (
 	"github.com/interfin/interfin-ai-crm/internal/models"
 	"github.com/interfin/interfin-ai-crm/internal/queue"
 	"github.com/interfin/interfin-ai-crm/internal/repo"
+	"github.com/interfin/interfin-ai-crm/internal/settings"
 )
 
 // historyFetchLimit — сколько последних сообщений поднимать из БД.
@@ -72,6 +74,12 @@ type ProcessorDeps struct {
 	// M12: событие message на каждый сохранённый outbound (чат менеджера
 	// live). nil — без публикации (юнит-тесты M3).
 	Pub events.Publisher
+
+	// M13 (takeover): Settings — интервалы контура напоминаний;
+	// TakeoverEnq — постановка takeover:reminder на inbound при молчащей
+	// Эмме. Оба nil — режим юнит-тестов M3 (без контура напоминаний).
+	Settings    settings.Reader
+	TakeoverEnq queue.TakeoverEnqueuer
 
 	Log *slog.Logger
 }
@@ -123,6 +131,16 @@ func (p *Processor) HandleProcessInbound(ctx context.Context, t *asynq.Task) err
 		}
 	}
 
+	// M13 (проверка №1): диалог у менеджера или идёт пауза автопилота —
+	// Эмма молчит. Inbound уже сохранён (M2), Kanban-триггеры отработали
+	// выше; вместо ответа взводится контур напоминаний (LOGIC-01), чтобы
+	// клиент не повис без ответа. Просроченная пауза = обычный режим bot.
+	if lead.BotSilenced(time.Now()) {
+		log.Info("worker: Эмма молчит (human/пауза), взводится напоминание",
+			"dialog_mode", lead.DialogMode, "silenced_until", lead.BotSilencedUntil)
+		return p.armTakeoverReminder(ctx, lead, payload.MsgID, log)
+	}
+
 	history, err := d.Msgs.ListByLead(ctx, lead.ID, historyFetchLimit)
 	if err != nil {
 		return fmt.Errorf("worker: история сообщений: %w", err)
@@ -155,6 +173,11 @@ func (p *Processor) HandleProcessInbound(ctx context.Context, t *asynq.Task) err
 	// детерминированной подсказкой тем же контуром save → send: ретрай
 	// после падения Send уйдёт в ветку переотправки выше.
 	if strings.TrimSpace(history[len(history)-1].Content) == "" {
+		// M13 (проверка №2): режим мог смениться, пока задача ждала в
+		// очереди/ретраилась — подсказка тоже не перебивает менеджера.
+		if dropped, err := p.dropIfSilenced(ctx, lead, payload.MsgID, log); err != nil || dropped {
+			return err
+		}
 		tokens := estimateTokens(nonTextReply)
 		author := models.AuthorBot
 		out := &models.Message{LeadID: lead.ID, Author: &author, Content: nonTextReply, Tokens: &tokens}
@@ -197,6 +220,14 @@ func (p *Processor) HandleProcessInbound(ctx context.Context, t *asynq.Task) err
 		return fmt.Errorf("worker: вызов claude: %w", err)
 	}
 
+	// M13, BUG-01 (проверка №2): менеджер мог забрать диалог за время
+	// генерации (3–15 с). Режим перечитывается из БД НЕПОСРЕДСТВЕННО перед
+	// сохранением: сменился — ответ отбрасывается без записи и без Send
+	// (несохранённое не переотправится и веткой ретрая выше).
+	if dropped, err := p.dropIfSilenced(ctx, lead, payload.MsgID, log); err != nil || dropped {
+		return err
+	}
+
 	// 5) Save outbound. Счётчики лида НЕ трогаем (CLAUDE.md §4.3).
 	replyTokens := estimateTokens(reply)
 	author := models.AuthorBot
@@ -222,6 +253,65 @@ func (p *Processor) HandleProcessInbound(ctx context.Context, t *asynq.Task) err
 		"dropped_history", stats.DroppedHistory,
 		"reply_tokens_estimate", replyTokens,
 	)
+	return nil
+}
+
+// dropIfSilenced — вторая проверка режима (M13, BUG-01): перечитывает лида
+// из БД перед CreateOutbound. dropped=true — режим сменился на human/паузу,
+// ответ отброшен, задача завершена успешно (не ретрай); заодно взводится
+// контур напоминаний — inbound остался без ответа при менеджере.
+// Стёртый за время генерации лид тоже гасит задачу.
+func (p *Processor) dropIfSilenced(ctx context.Context, lead *models.Lead, tgMsgID int, log *slog.Logger) (bool, error) {
+	fresh, err := p.deps.Leads.GetByID(ctx, lead.ID)
+	if errors.Is(err, repo.ErrNotFound) {
+		log.Warn("worker: лид стёрт за время генерации, ответ отброшен")
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("worker: перечитывание режима перед ответом: %w", err)
+	}
+	if !fresh.BotSilenced(time.Now()) {
+		return false, nil
+	}
+	log.Info("worker: режим сменился за время генерации — ответ отброшен без записи",
+		"dialog_mode", fresh.DialogMode, "silenced_until", fresh.BotSilencedUntil)
+	return true, p.armTakeoverReminder(ctx, fresh, tgMsgID, log)
+}
+
+// armTakeoverReminder ставит takeover:reminder через reminder_minutes
+// (LOGIC-01): клиент написал, а Эмма молчит — менеджер обязан ответить,
+// иначе придёт напоминание, а затем подхват. Дедуп — TaskID по
+// (lead, message_count): повторная доставка апдейта не плодит напоминаний.
+// Если менеджер УЖЕ ответил (последнее сообщение — не inbound), напоминание
+// не нужно. Ошибка постановки возвращается наверх: ретрай задачи повторит
+// взвод — потерянное напоминание оставило бы клиента висеть.
+func (p *Processor) armTakeoverReminder(ctx context.Context, lead *models.Lead, tgMsgID int, log *slog.Logger) error {
+	d := p.deps
+	if d.TakeoverEnq == nil || d.Settings == nil {
+		return nil // юнит-тесты M3: контур напоминаний не собран
+	}
+	last, err := d.Msgs.ListByLead(ctx, lead.ID, 1)
+	if err != nil {
+		return fmt.Errorf("worker: takeover: последнее сообщение: %w", err)
+	}
+	if len(last) == 0 || last[0].Direction != models.DirectionInbound {
+		return nil // менеджер/бот уже ответил — клиент не ждёт
+	}
+	delay := time.Duration(d.Settings.Minutes(ctx, settings.KeyReminderMinutes)) * time.Minute
+	err = d.TakeoverEnq.EnqueueTakeoverReminder(ctx, queue.TakeoverPayload{
+		LeadID:       lead.ID,
+		MessageCount: lead.MessageCount,
+		InboundMsgID: last[0].ID,
+		InboundAt:    last[0].CreatedAt,
+		TgMsgID:      tgMsgID,
+	}, delay)
+	switch {
+	case errors.Is(err, queue.ErrDuplicate):
+		return nil // уже взведено (дубль апдейта) — §4.5 в работе
+	case err != nil:
+		return fmt.Errorf("worker: takeover: постановка напоминания: %w", err)
+	}
+	log.Info("worker: взведено напоминание менеджеру", "delay", delay.String())
 	return nil
 }
 

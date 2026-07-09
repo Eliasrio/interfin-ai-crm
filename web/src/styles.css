@@ -140,3 +140,22 @@ body {
 .toast-warn { border-left-color: var(--warn); }
 .toast-error { border-left-color: var(--danger); }
 .toast-ok { border-left-color: var(--ok); }
+
+/* --- M13: режим диалога (takeover) и настройки --- */
+.mode-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px;
+  margin-bottom: 8px; background: #fafbfd; flex-wrap: wrap;
+}
+.mode-bar .mode-label { font-size: 13.5px; }
+.mode-bar .mode-actions { display: flex; gap: 8px; }
+.mode-human { border-left: 4px solid var(--warn); }
+.mode-paused { border-left: 4px solid var(--muted); }
+.mode-bot { border-left: 4px solid var(--ok); }
+
+.modal-settings { max-width: 520px; }
+.settings-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
+.settings-field input {
+  border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; font: inherit; width: 120px;
+}
+.settings-field small { font-size: 12px; }

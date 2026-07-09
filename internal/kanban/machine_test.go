@@ -148,6 +148,10 @@ func (f *fakeMsgs) ListByLeadBefore(context.Context, int64, int64, int) ([]model
 	return nil, nil
 }
 
+func (f *fakeMsgs) HasManagerOutboundAfter(context.Context, int64, int64) (bool, error) {
+	return false, nil // контур takeover (M13) в тестах state machine не участвует
+}
+
 type ttlCall struct {
 	leadID int64
 	delay  time.Duration

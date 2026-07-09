@@ -237,6 +237,55 @@ func (r *messageRepo) listPage(ctx context.Context, leadID, beforeID int64, limi
 	return msgs, nil
 }
 
+func (r *messageRepo) HasManagerOutboundAfter(ctx context.Context, leadID, afterID int64) (bool, error) {
+	var found models.Message
+	err := r.db.WithContext(ctx).
+		Select("id").
+		Where("lead_id = ? AND id > ? AND direction = ? AND author LIKE 'manager:%'",
+			leadID, afterID, models.DirectionOutbound).
+		First(&found).Error
+	switch {
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("repo: has manager outbound after: %w", err)
+	}
+	return true, nil
+}
+
+// --- settings (M13) ---
+
+// NewSettings — репозиторий settings поверх того же *gorm.DB.
+func NewSettings(db *gorm.DB) SettingsRepo {
+	return &settingsRepo{db: db}
+}
+
+type settingsRepo struct{ db *gorm.DB }
+
+func (r *settingsRepo) Get(ctx context.Context, key string) (string, error) {
+	var s models.Setting
+	if err := r.db.WithContext(ctx).First(&s, "key = ?", key).Error; err != nil {
+		return "", wrapNotFound(err, "repo: get setting")
+	}
+	return s.Value, nil
+}
+
+func (r *settingsRepo) Set(ctx context.Context, key, value string) error {
+	err := r.db.WithContext(ctx).
+		Clauses(clause.OnConflict{
+			Columns: []clause.Column{{Name: "key"}},
+			DoUpdates: clause.Assignments(map[string]interface{}{
+				"value":      value,
+				"updated_at": gorm.Expr("NOW()"),
+			}),
+		}).
+		Create(&models.Setting{Key: key, Value: value}).Error
+	if err != nil {
+		return fmt.Errorf("repo: set setting %s: %w", key, err)
+	}
+	return nil
+}
+
 // --- payment_events ---
 
 type paymentRepo struct{ db *gorm.DB }

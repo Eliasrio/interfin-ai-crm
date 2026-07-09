@@ -96,6 +96,22 @@ export function postInvoice(id, { amount, asset, description }) {
   return apiFetch(`/api/leads/${id}/invoice`, { method: 'POST', body })
 }
 
+// --- Ручки M13 (takeover; контракт — tasks/M13_takeover.md) ---
+
+// patchMode — «Взять в работу» (human) / «Вернуть Эмме» (bot).
+export function patchMode(id, mode) {
+  return apiFetch(`/api/leads/${id}/mode`, { method: 'PATCH', body: { mode } })
+}
+
+export function fetchSettings() {
+  return apiFetch('/api/settings')
+}
+
+// patchSettings — {ключ: минуты}, только admin (бэкенд отдаёт 403 остальным).
+export function patchSettings(values) {
+  return apiFetch('/api/settings', { method: 'PATCH', body: values })
+}
+
 export function lgpdErase(id) {
   return apiFetch(`/api/lgpd/leads/${id}/erase`, { method: 'DELETE' })
 }

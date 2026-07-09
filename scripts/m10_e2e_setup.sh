@@ -19,6 +19,8 @@ export PATH="$HOME/sdk/go1.22.12/bin:$PATH" GOTOOLCHAIN=go1.22.12
 export POSTGRES_DSN='postgres://postgres:postgres@localhost:5432/interfin?sslmode=disable'
 printf 'e2e-m10-pass\n' | go run ./cmd/create-manager -email e2e-m10-ui@interfin.com -name 'E2E UI' -role manager
 printf 'e2e-m10-pass\n' | go run ./cmd/create-manager -email e2e-m10-actor@interfin.com -name 'E2E Actor' -role manager
+# M13: секция «Настройки» видна только admin (takeover.e2e.test.jsx).
+printf 'e2e-m10-pass\n' | go run ./cmd/create-manager -email e2e-m10-admin@interfin.com -name 'E2E Admin' -role admin
 
 echo "== тестовый лид 'M10 E2E Лид' на стадии 2"
 # telegram_user_id уникален НА КАЖДЫЙ прогон: LGPD-хеш при erasure

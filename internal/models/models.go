@@ -116,6 +116,12 @@ const (
 	AuthorManagerPrefix = "manager:" // + Subject из JWT claims
 )
 
+// Режимы диалога лида (M13, CHECK-констрейнт в 0013): кто ведёт переписку.
+const (
+	DialogModeBot   = "bot"   // отвечает Эмма (возможна пауза автопилота)
+	DialogModeHuman = "human" // менеджер забрал диалог кнопкой
+)
+
 // Lead — §8.1. Строка Kanban-доски: один Telegram-пользователь = один лид.
 type Lead struct {
 	ID               int64          `gorm:"column:id;primaryKey"`
@@ -132,11 +138,24 @@ type Lead struct {
 	PendingTask      bool           `gorm:"column:pending_task"` // AQ²-fix #1: Redis down → TRUE
 	EscalatedAt      *time.Time     `gorm:"column:escalated_at"` // AQ²-fix #8
 	ConsentGivenAt   *time.Time     `gorm:"column:consent_given_at"`
-	DeletedAt        gorm.DeletedAt `gorm:"column:deleted_at"` // LGPD erasure = soft delete; выборки сами исключают стёртых
+	DialogMode       string         `gorm:"column:dialog_mode;default:bot"` // M13: bot | human (CHECK в БД); default обязателен — без него GORM вставлял бы '' мимо DEFAULT БД
+	BotSilencedUntil *time.Time     `gorm:"column:bot_silenced_until"`      // M13: пауза автопилота; NULL/прошлое = не молчит
+	TakenBy          *int64         `gorm:"column:taken_by"`                // M13: id менеджера, взявшего диалог
+	DeletedAt        gorm.DeletedAt `gorm:"column:deleted_at"`              // LGPD erasure = soft delete; выборки сами исключают стёртых
 	CreatedAt        time.Time      `gorm:"column:created_at"`
 }
 
 func (Lead) TableName() string { return "leads" }
+
+// BotSilenced — Эмме отвечать нельзя: диалог у менеджера (human) либо идёт
+// пауза автопилота. Просроченная пауза равна её отсутствию — отдельный крон
+// снятия не нужен, проверка по месту (task M13 §5).
+func (l *Lead) BotSilenced(now time.Time) bool {
+	if l.DialogMode == DialogModeHuman {
+		return true
+	}
+	return l.BotSilencedUntil != nil && l.BotSilencedUntil.After(now)
+}
 
 // Message — §8.2. Одна реплика диалога (лид, бот или менеджер — M12).
 type Message struct {
@@ -250,6 +269,17 @@ type RefreshToken struct {
 
 func (RefreshToken) TableName() string { return "refresh_tokens" }
 
+// Setting — M13 (0014). Key/value-настройка CRM, редактируемая из UI;
+// отсутствие строки = дефолт из кода (internal/settings). Значение — TEXT:
+// таблица общая для будущих ключей блока 3, типизация — на слое сервиса.
+type Setting struct {
+	Key       string    `gorm:"column:key;primaryKey"`
+	Value     string    `gorm:"column:value"`
+	UpdatedAt time.Time `gorm:"column:updated_at"`
+}
+
+func (Setting) TableName() string { return "settings" }
+
 // All — реестр всех персистентных моделей для cmd/schema-lint.
 // Добавил модель — добавь её сюда, иначе lint её не проверит.
 func All() []interface{} {
@@ -263,5 +293,6 @@ func All() []interface{} {
 		ConversationSummary{},
 		Manager{},
 		RefreshToken{},
+		Setting{},
 	}
 }

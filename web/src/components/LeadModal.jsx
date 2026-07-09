@@ -9,6 +9,7 @@ import { useStore } from '../hooks.js'
 import { displayName } from './LeadCard.jsx'
 import ChatPanel from './ChatPanel.jsx'
 import LgpdPanel from './LgpdPanel.jsx'
+import ModeBar from './ModeBar.jsx'
 
 export default function LeadModal({ leadId, role, onClose, onMoveLead }) {
   const { leadsById } = useStore()
@@ -79,6 +80,7 @@ export default function LeadModal({ leadId, role, onClose, onMoveLead }) {
 
         <section className="modal-section">
           <h3>Чат</h3>
+          <ModeBar lead={lead} />
           {error && <div className="form-error">{error}</div>}
           <ChatPanel lead={lead} />
         </section>

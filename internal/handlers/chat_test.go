@@ -166,13 +166,17 @@ func TestChatPostMessage(t *testing.T) {
 	if dto["direction"] != "outbound" || dto["author"] != "manager:1" {
 		t.Fatalf("DTO ответа: %v", dto)
 	}
-	if len(rig.pub.events) != 1 {
-		t.Fatalf("событий %d, ждали 1", len(rig.pub.events))
+	// Событий два: message + dialog_mode паузы автопилота (M13).
+	if len(rig.pub.events) != 2 {
+		t.Fatalf("событий %d, ждали 2", len(rig.pub.events))
 	}
 	ev := rig.pub.events[0]
 	if ev.Type != events.TypeMessage || ev.LeadID != 1 || ev.Author != "manager:1" ||
 		ev.Direction != models.DirectionOutbound || ev.StageID != lead.StageID {
 		t.Fatalf("событие message: %+v", ev)
+	}
+	if rig.pub.events[1].Type != events.TypeDialogMode {
+		t.Fatalf("вторым ждали dialog_mode автопилота: %+v", rig.pub.events[1])
 	}
 }
 
@@ -254,7 +258,9 @@ func TestChatInvoice(t *testing.T) {
 		!strings.Contains(stored[0].Content, m["url"].(string)) {
 		t.Fatalf("outbound со ссылкой: %+v", stored)
 	}
-	if len(rig.pub.events) != 1 || rig.pub.events[0].Type != events.TypeMessage {
+	// Событий два: message + dialog_mode паузы автопилота (M13).
+	if len(rig.pub.events) != 2 || rig.pub.events[0].Type != events.TypeMessage ||
+		rig.pub.events[1].Type != events.TypeDialogMode {
 		t.Fatalf("события: %+v", rig.pub.events)
 	}
 }

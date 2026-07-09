@@ -8,6 +8,7 @@ import { useClaims, useStore } from './hooks.js'
 import LoginForm from './components/LoginForm.jsx'
 import Board from './components/Board.jsx'
 import LeadModal from './components/LeadModal.jsx'
+import SettingsModal from './components/SettingsModal.jsx'
 import Toasts from './components/Toasts.jsx'
 import ConnectionBadge from './components/ConnectionBadge.jsx'
 
@@ -15,6 +16,7 @@ export default function App() {
   const claims = useClaims()
   const { alerts, connection } = useStore()
   const [selectedLeadId, setSelectedLeadId] = useState(null)
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const authed = Boolean(claims)
 
   // Сокет живёт, пока жива сессия. Ключ — authed (bool), не сами claims:
@@ -42,6 +44,11 @@ export default function App() {
           <span className="whoami">
             {claims.role} #{claims.sub}
           </span>
+          {claims.role === 'admin' && (
+            <button className="btn btn-ghost" onClick={() => setSettingsOpen(true)}>
+              ⚙ Настройки
+            </button>
+          )}
           <button className="btn btn-ghost" onClick={() => auth.logout()}>
             Выйти
           </button>
@@ -56,6 +63,7 @@ export default function App() {
           onMoveLead={moveLead}
         />
       )}
+      {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
       <Toasts alerts={alerts} onDismiss={store.dismissAlert} />
     </div>
   )
