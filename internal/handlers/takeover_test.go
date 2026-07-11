@@ -3,7 +3,9 @@
 package handlers
 
 import (
+	"context"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,6 +14,7 @@ import (
 	"github.com/interfin/interfin-ai-crm/internal/auth"
 	"github.com/interfin/interfin-ai-crm/internal/events"
 	"github.com/interfin/interfin-ai-crm/internal/models"
+	"github.com/interfin/interfin-ai-crm/internal/settings"
 )
 
 func (rig *apiRig) modeEvents() []events.Event {
@@ -231,23 +234,54 @@ func TestSettings_ManagerForbidden(t *testing.T) {
 		gin.H{"takeover.reminder_minutes": 5}), http.StatusForbidden, "ERR_FORBIDDEN")
 }
 
+// TestSettings_EmmaPanelKeysHidden — EP-01: служебный emma_panel.pin_hash
+// (и остальные строковые ключи панели) не света через /api/settings —
+// они управляются только внутренним контуром /api/emma/*.
+func TestSettings_EmmaPanelKeysHidden(t *testing.T) {
+	rig := newAPIRig(t)
+	admin := rig.token(t, auth.RoleAdmin)
+
+	// Даже записанный в БД pin_hash не появляется в GET.
+	if err := rig.settings.SetString(context.Background(),
+		settings.KeyPinHash, "$2a$12$hash"); err != nil {
+		t.Fatal(err)
+	}
+	m := wantStatus(t, rig.do(t, http.MethodGet, "/api/settings", admin, nil),
+		http.StatusOK, "")
+	for key := range m["settings"].(map[string]any) {
+		if strings.HasPrefix(key, "emma_panel.") {
+			t.Errorf("GET /api/settings отдал ключ панели: %s", key)
+		}
+	}
+
+	// PATCH с pin_hash → 400 ERR_UNKNOWN_KEY, значение не тронуто.
+	wantStatus(t, rig.do(t, http.MethodPatch, "/api/settings", admin,
+		gin.H{"emma_panel.pin_hash": 123456}), http.StatusBadRequest, "ERR_UNKNOWN_KEY")
+	if got := rig.settings.String(context.Background(), settings.KeyPinHash); got != "$2a$12$hash" {
+		t.Errorf("PATCH дотянулся до pin_hash: %q", got)
+	}
+}
+
 func TestSettings_PatchValidation(t *testing.T) {
 	rig := newAPIRig(t)
 	admin := rig.token(t, auth.RoleAdmin)
 
 	for name, body := range map[string]any{
-		"ноль":             gin.H{"takeover.reminder_minutes": 0},
-		"отрицательное":    gin.H{"takeover.reminder_minutes": -5},
-		"строка-мусор":     gin.H{"takeover.reminder_minutes": "abc"},
-		"дробное":          gin.H{"takeover.reminder_minutes": 2.5},
-		"больше суток":     gin.H{"takeover.reminder_minutes": 1441},
-		"неизвестный ключ": gin.H{"takeover.unknown": 10},
-		"пустое тело":      gin.H{},
+		"ноль":          gin.H{"takeover.reminder_minutes": 0},
+		"отрицательное": gin.H{"takeover.reminder_minutes": -5},
+		"строка-мусор":  gin.H{"takeover.reminder_minutes": "abc"},
+		"дробное":       gin.H{"takeover.reminder_minutes": 2.5},
+		"больше суток":  gin.H{"takeover.reminder_minutes": 1441},
+		"пустое тело":   gin.H{},
 	} {
 		w := rig.do(t, http.MethodPatch, "/api/settings", admin, body)
 		wantStatus(t, w, http.StatusBadRequest, "ERR_VALIDATION")
 		_ = name
 	}
+
+	// Неизвестный ключ — отдельный код ERR_UNKNOWN_KEY (EP-01).
+	wantStatus(t, rig.do(t, http.MethodPatch, "/api/settings", admin,
+		gin.H{"takeover.unknown": 10}), http.StatusBadRequest, "ERR_UNKNOWN_KEY")
 
 	// Всё или ничего: валидный ключ в одном запросе с мусорным НЕ применяется.
 	wantStatus(t, rig.do(t, http.MethodPatch, "/api/settings", admin,

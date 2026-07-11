@@ -19,7 +19,8 @@ RUN CGO_ENABLED=0 go build -o /out/server ./cmd/server \
  && CGO_ENABLED=0 go build -o /out/migrate ./cmd/migrate \
  && CGO_ENABLED=0 go build -o /out/create-manager ./cmd/create-manager \
  && CGO_ENABLED=0 go build -o /out/index-kb ./cmd/index-kb \
- && CGO_ENABLED=0 go build -o /out/create-invoice ./cmd/create-invoice
+ && CGO_ENABLED=0 go build -o /out/create-invoice ./cmd/create-invoice \
+ && CGO_ENABLED=0 go build -o /out/reset-emma-pin ./cmd/reset-emma-pin
 
 # 3.21 вместо 3.19: нужен поддерживаемый репозиторий со свежим
 # ca-certificates — устаревший комплект корней даёт «x509: unknown
@@ -39,6 +40,8 @@ COPY --from=build /out/index-kb /app/index-kb
 # Выставление счёта CryptoBot лиду (пока нет кнопки на доске) —
 # scripts/new_invoice.sh.
 COPY --from=build /out/create-invoice /app/create-invoice
+# EP-01: сброс забытого PIN панели Эммы (one-off на сети стека, ТЗ §2.2).
+COPY --from=build /out/reset-emma-pin /app/reset-emma-pin
 COPY config/config.yaml /app/config/config.yaml
 COPY migrations /app/migrations
 # server.static_dir: web/dist (относительно WORKDIR /app)

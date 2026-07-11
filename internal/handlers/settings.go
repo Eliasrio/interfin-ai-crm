@@ -64,8 +64,11 @@ func (h *SettingsHandler) patch(c *gin.Context) {
 	// не оставляет вторую половину запроса применённой.
 	values := make(map[string]int, len(req))
 	for key, raw := range req {
+		// Неизвестный ключ → ERR_UNKNOWN_KEY (EP-01). Сюда же попадает
+		// служебный emma_panel.pin_hash и остальные строковые ключи панели:
+		// они управляются ТОЛЬКО через /api/emma/*, наружу их не видно.
 		if _, known := settings.Defaults[key]; !known {
-			apiError(c, http.StatusBadRequest, "неизвестный ключ настройки: "+key, codeValidation)
+			apiError(c, http.StatusBadRequest, "неизвестный ключ настройки: "+key, codeUnknownKey)
 			return
 		}
 		v, err := raw.Int64()

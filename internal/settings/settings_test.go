@@ -114,6 +114,117 @@ func TestMinutes_ZeroFromDB(t *testing.T) {
 	}
 }
 
+// --- Строковые ключи EP-01: та же дисциплина, что у Minutes ---
+
+func TestString_DefaultsWhenMissing(t *testing.T) {
+	svc := New(newFakeRepo())
+	ctx := context.Background()
+	for key, want := range map[string]string{
+		KeyPinHash:              "",
+		KeyPromptTokenLimit:     "1200",
+		KeyWelcomeText:          "",
+		KeyManagerButtonEnabled: "false",
+		KeyManagerButtonText:    "Связаться с менеджером",
+		KeyHandoffConfirmText:   "Сейчас свяжу вас с менеджером, ожидайте",
+		KeyAlertChatID:          "",
+	} {
+		if got := svc.String(ctx, key); got != want {
+			t.Errorf("%s: default = %q, ожидали %q", key, got, want)
+		}
+	}
+}
+
+func TestString_OverrideAndCache(t *testing.T) {
+	r := newFakeRepo()
+	r.values[KeyWelcomeText] = "Привет!"
+	svc := New(r)
+	now := time.Now()
+	svc.now = func() time.Time { return now }
+	ctx := context.Background()
+
+	if got := svc.String(ctx, KeyWelcomeText); got != "Привет!" {
+		t.Fatalf("override = %q", got)
+	}
+	svc.String(ctx, KeyWelcomeText)
+	if r.gets != 1 {
+		t.Errorf("чтений БД %d, ожидали 1 (кэш 30с)", r.gets)
+	}
+	now = now.Add(31 * time.Second)
+	svc.String(ctx, KeyWelcomeText)
+	if r.gets != 2 {
+		t.Errorf("чтений БД %d, ожидали 2 (кэш истёк)", r.gets)
+	}
+}
+
+func TestString_RepoErrorNotCached(t *testing.T) {
+	r := newFakeRepo()
+	r.getErr = errors.New("db down")
+	svc := New(r)
+	ctx := context.Background()
+	if got := svc.String(ctx, KeyPromptTokenLimit); got != "1200" {
+		t.Fatalf("при ошибке БД ожидали дефолт, got %q", got)
+	}
+	r.getErr = nil
+	r.values[KeyPromptTokenLimit] = "2000"
+	if got := svc.String(ctx, KeyPromptTokenLimit); got != "2000" {
+		t.Errorf("после восстановления БД ожидали 2000, got %q", got)
+	}
+}
+
+func TestSetString_ValidatesAndInvalidatesCache(t *testing.T) {
+	r := newFakeRepo()
+	svc := New(r)
+	ctx := context.Background()
+
+	// Прогрели кэш дефолтом — после SetString новое значение видно сразу.
+	if got := svc.String(ctx, KeyPinHash); got != "" {
+		t.Fatalf("дефолт pin_hash = %q, ожидали пустой", got)
+	}
+	if err := svc.SetString(ctx, KeyPinHash, "$2a$12$hash"); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	if got := svc.String(ctx, KeyPinHash); got != "$2a$12$hash" {
+		t.Errorf("после SetString = %q (кэш обязан сброситься)", got)
+	}
+
+	if err := svc.SetString(ctx, "emma_panel.nope", "x"); !errors.Is(err, ErrUnknownKey) {
+		t.Errorf("неизвестный ключ: err = %v, ожидали ErrUnknownKey", err)
+	}
+	// Int-ключи M13 через строковый API не пишутся — списки раздельные.
+	if err := svc.SetString(ctx, KeyReminderMinutes, "5"); !errors.Is(err, ErrUnknownKey) {
+		t.Errorf("int-ключ через SetString: err = %v, ожидали ErrUnknownKey", err)
+	}
+}
+
+// TestString_IndependentFromMinutes — регресс M13: строковый контур не
+// задевает int-ключи takeover.* (общая таблица, раздельные кэши и списки).
+func TestString_IndependentFromMinutes(t *testing.T) {
+	r := newFakeRepo()
+	svc := New(r)
+	ctx := context.Background()
+	if err := svc.SetMinutes(ctx, KeyReminderMinutes, 7); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.SetString(ctx, KeyWelcomeText, "hi"); err != nil {
+		t.Fatal(err)
+	}
+	if got := svc.Minutes(ctx, KeyReminderMinutes); got != 7 {
+		t.Errorf("Minutes после SetString = %d, ожидали 7", got)
+	}
+	if got := svc.String(ctx, KeyWelcomeText); got != "hi" {
+		t.Errorf("String после SetMinutes = %q, ожидали hi", got)
+	}
+	// All() (GET /api/settings) по-прежнему только int-ключи — pin_hash
+	// и остальные emma_panel.* наружу не света.
+	all := svc.All(ctx)
+	if len(all) != len(Defaults) {
+		t.Errorf("All() вернул %d ключей, ожидали %d (только int)", len(all), len(Defaults))
+	}
+	if _, leaked := all[KeyPinHash]; leaked {
+		t.Error("All() отдал служебный emma_panel.pin_hash")
+	}
+}
+
 func TestSetMinutes_ValidatesAndInvalidatesCache(t *testing.T) {
 	r := newFakeRepo()
 	svc := New(r)

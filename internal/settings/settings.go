@@ -42,6 +42,37 @@ var Defaults = map[string]int{
 	KeyPickupMinutes:      10,
 }
 
+// Строковые ключи панели Эммы (EP-01, ТЗ EMMA_PANEL_TZ_v2 §5).
+const (
+	// KeyPinHash — bcrypt-хэш PIN панели. СЛУЖЕБНЫЙ: не отдаётся через
+	// GET /api/settings и не принимается через PATCH — только internal/emma.
+	KeyPinHash = "emma_panel.pin_hash"
+	// KeyPromptTokenLimit — лимит токенов системного промпта (EP-02).
+	KeyPromptTokenLimit = "emma_panel.prompt_token_limit"
+	// KeyWelcomeText — приветствие /start (EP-05).
+	KeyWelcomeText = "emma_panel.welcome_text"
+	// KeyManagerButtonEnabled — показывать ли кнопку «Связаться с менеджером» (EP-05).
+	KeyManagerButtonEnabled = "emma_panel.manager_button_enabled"
+	// KeyManagerButtonText — подпись кнопки менеджера (EP-05).
+	KeyManagerButtonText = "emma_panel.manager_button_text"
+	// KeyHandoffConfirmText — ответ клиенту при переводе на менеджера (EP-05).
+	KeyHandoffConfirmText = "emma_panel.handoff_confirm_text"
+	// KeyAlertChatID — Telegram-чат владельца для алертов Эммы (EP-06).
+	KeyAlertChatID = "emma_panel.alert_chat_id"
+)
+
+// StringDefaults — дефолты строковых ключей (EP-01 §2 task-файла).
+// Типизация значения (bool/int) — на потребителе, здесь только строки.
+var StringDefaults = map[string]string{
+	KeyPinHash:              "",
+	KeyPromptTokenLimit:     "1200",
+	KeyWelcomeText:          "",
+	KeyManagerButtonEnabled: "false",
+	KeyManagerButtonText:    "Связаться с менеджером",
+	KeyHandoffConfirmText:   "Сейчас свяжу вас с менеджером, ожидайте",
+	KeyAlertChatID:          "",
+}
+
 // Границы значений для PATCH /api/settings: минуты 1..1440 (сутки).
 const (
 	MinMinutes = 1
@@ -68,8 +99,9 @@ type Reader interface {
 type Service struct {
 	repo repo.SettingsRepo
 
-	mu    sync.Mutex
-	cache map[string]cacheEntry
+	mu       sync.Mutex
+	cache    map[string]cacheEntry
+	strCache map[string]strCacheEntry // строковые ключи EP-01 — отдельный кэш, та же дисциплина
 
 	now func() time.Time // подменяется в тестах кэша
 }
@@ -79,8 +111,18 @@ type cacheEntry struct {
 	expires time.Time
 }
 
+type strCacheEntry struct {
+	val     string
+	expires time.Time
+}
+
 func New(r repo.SettingsRepo) *Service {
-	return &Service{repo: r, cache: map[string]cacheEntry{}, now: time.Now}
+	return &Service{
+		repo:     r,
+		cache:    map[string]cacheEntry{},
+		strCache: map[string]strCacheEntry{},
+		now:      time.Now,
+	}
 }
 
 // Minutes реализует Reader. Нечисловое значение в БД (легаси/ручная правка)
@@ -144,5 +186,56 @@ func (s *Service) SetMinutes(ctx context.Context, key string, minutes int) error
 func (s *Service) store(key string, val int) {
 	s.mu.Lock()
 	s.cache[key] = cacheEntry{val: val, expires: s.now().Add(cacheTTL)}
+	s.mu.Unlock()
+}
+
+// --- Строковые ключи (EP-01): та же семантика, что у Minutes/SetMinutes ---
+
+// String — значение строкового ключа: переопределение из БД или дефолт из
+// StringDefaults. Ошибки чтения деградируют до дефолта и НЕ кэшируются
+// (как Minutes). Для неизвестного ключа — "" (потребители ходят по константам).
+func (s *Service) String(ctx context.Context, key string) string {
+	def := StringDefaults[key]
+
+	s.mu.Lock()
+	if e, ok := s.strCache[key]; ok && s.now().Before(e.expires) {
+		s.mu.Unlock()
+		return e.val
+	}
+	s.mu.Unlock()
+
+	raw, err := s.repo.Get(ctx, key)
+	switch {
+	case errors.Is(err, repo.ErrNotFound):
+		s.storeString(key, def)
+		return def
+	case err != nil:
+		// БД недоступна — дефолт без кэширования: следующее чтение попробует
+		// снова (та же дисциплина, что у Minutes).
+		return def
+	}
+	s.storeString(key, raw)
+	return raw
+}
+
+// SetString валидирует ключ и сохраняет переопределение. Кэш ключа
+// сбрасывается сразу — процесс, принявший запись, видит новое значение
+// немедленно; остальные реплики — в пределах cacheTTL.
+func (s *Service) SetString(ctx context.Context, key, val string) error {
+	if _, ok := StringDefaults[key]; !ok {
+		return fmt.Errorf("%w: %s", ErrUnknownKey, key)
+	}
+	if err := s.repo.Set(ctx, key, val); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	delete(s.strCache, key)
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *Service) storeString(key, val string) {
+	s.mu.Lock()
+	s.strCache[key] = strCacheEntry{val: val, expires: s.now().Add(cacheTTL)}
 	s.mu.Unlock()
 }

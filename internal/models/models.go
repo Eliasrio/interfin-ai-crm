@@ -281,6 +281,110 @@ type Setting struct {
 
 func (Setting) TableName() string { return "settings" }
 
+// --- Панель Эммы (EP-01, миграции 0016–0020, ТЗ EMMA_PANEL_TZ_v2 §5) ---
+
+// Стили общения Эммы (CHECK в emma_prompt_versions).
+const (
+	EmmaStyleFormal   = "formal"
+	EmmaStyleFriendly = "friendly"
+	EmmaStyleNeutral  = "neutral"
+	EmmaStyleExpert   = "expert"
+)
+
+// Статусы RAG-индексации файла базы знаний (CHECK в emma_kb_files).
+const (
+	EmmaKBPending = "pending"
+	EmmaKBIndexed = "indexed"
+	EmmaKBError   = "error"
+)
+
+// Типы событий журнала Эммы (CHECK в emma_events).
+const (
+	EmmaEventReply    = "reply"
+	EmmaEventFileSent = "file_sent"
+	EmmaEventHandoff  = "handoff"
+	EmmaEventError    = "error"
+)
+
+// EmmaPromptVersion — версия системного промпта Эммы (0016). Активная
+// версия ровно одна — частичный уникальный индекс WHERE is_current.
+type EmmaPromptVersion struct {
+	ID           int64  `gorm:"column:id;primaryKey"`
+	SystemPrompt string `gorm:"column:system_prompt"`
+	// default обязателен: пустой JSONB кодируется NULL (Value → nil) и без
+	// него вставка падала бы на NOT NULL (грабля M13 dialog_mode).
+	ForbiddenTopics JSONB     `gorm:"column:forbidden_topics;type:jsonb;default:'[]'"`
+	Style           string    `gorm:"column:style;default:neutral"` // CHECK в БД
+	IsCurrent       bool      `gorm:"column:is_current"`
+	CreatedBy       *int64    `gorm:"column:created_by"` // NULL после удаления менеджера (SET NULL)
+	CreatedAt       time.Time `gorm:"column:created_at"`
+}
+
+func (EmmaPromptVersion) TableName() string { return "emma_prompt_versions" }
+
+// EmmaKBFile — файл базы знаний панели (0017). Сам файл — data/emma/kb/<uuid>,
+// UNIQUE(filename): повторная загрузка = замена.
+type EmmaKBFile struct {
+	ID          int64     `gorm:"column:id;primaryKey"`
+	Filename    string    `gorm:"column:filename"`
+	MimeType    string    `gorm:"column:mime_type"`
+	FilePath    string    `gorm:"column:file_path"`
+	FileSize    int64     `gorm:"column:file_size"`
+	IndexStatus string    `gorm:"column:index_status;default:pending"` // CHECK в БД
+	IndexError  *string   `gorm:"column:index_error"`
+	ChunksCount int       `gorm:"column:chunks_count"`
+	CreatedAt   time.Time `gorm:"column:created_at"`
+}
+
+func (EmmaKBFile) TableName() string { return "emma_kb_files" }
+
+// EmmaSendFile — файл, который Эмма отправляет клиентам (0018).
+// IsActive задавать явно при Create: zero value затёр бы DEFAULT TRUE
+// схемы (грабля M5, как Manager.Active).
+type EmmaSendFile struct {
+	ID          int64     `gorm:"column:id;primaryKey"`
+	Name        string    `gorm:"column:name"`
+	Description string    `gorm:"column:description"` // подсказка Эмме
+	FilePath    string    `gorm:"column:file_path"`
+	MimeType    string    `gorm:"column:mime_type"`
+	FileSize    int64     `gorm:"column:file_size"`
+	IsActive    bool      `gorm:"column:is_active"`
+	CreatedAt   time.Time `gorm:"column:created_at"`
+}
+
+func (EmmaSendFile) TableName() string { return "emma_send_files" }
+
+// EmmaContact — контакт/ссылка справочника Эммы (0019). IsActive — явно
+// при Create (та же грабля M5).
+type EmmaContact struct {
+	ID        int64   `gorm:"column:id;primaryKey"`
+	Type      string  `gorm:"column:type"` // CHECK в БД: phone|whatsapp|telegram|email|website|other
+	Name      string  `gorm:"column:name"`
+	Value     string  `gorm:"column:value"`
+	Comment   *string `gorm:"column:comment"`
+	IsActive  bool    `gorm:"column:is_active"`
+	SortOrder int     `gorm:"column:sort_order"`
+}
+
+func (EmmaContact) TableName() string { return "emma_contacts" }
+
+// EmmaEvent — запись журнала Эммы (0020): ответ, отправка файла, handoff,
+// ошибка. lead_id/send_file_id — SET NULL при удалении родителя (LGPD ТЗ §5).
+type EmmaEvent struct {
+	ID             int64     `gorm:"column:id;primaryKey"`
+	EventType      string    `gorm:"column:event_type"` // CHECK в БД
+	ErrorKind      *string   `gorm:"column:error_kind"` // llm_api/telegram_api/timeout/file_not_found/kb_index
+	Detail         *string   `gorm:"column:detail"`
+	LeadID         *int64    `gorm:"column:lead_id"`
+	SendFileID     *int64    `gorm:"column:send_file_id"`
+	ResponseTimeMs *int      `gorm:"column:response_time_ms"`
+	TokensIn       *int      `gorm:"column:tokens_in"`  // usage.input_tokens (event_type='reply')
+	TokensOut      *int      `gorm:"column:tokens_out"` // usage.output_tokens
+	CreatedAt      time.Time `gorm:"column:created_at"`
+}
+
+func (EmmaEvent) TableName() string { return "emma_events" }
+
 // All — реестр всех персистентных моделей для cmd/schema-lint.
 // Добавил модель — добавь её сюда, иначе lint её не проверит.
 func All() []interface{} {
@@ -295,5 +399,10 @@ func All() []interface{} {
 		Manager{},
 		RefreshToken{},
 		Setting{},
+		EmmaPromptVersion{},
+		EmmaKBFile{},
+		EmmaSendFile{},
+		EmmaContact{},
+		EmmaEvent{},
 	}
 }

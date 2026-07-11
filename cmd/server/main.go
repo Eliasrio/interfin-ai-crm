@@ -26,6 +26,7 @@ import (
 	"github.com/interfin/interfin-ai-crm/internal/config"
 	"github.com/interfin/interfin-ai-crm/internal/db"
 	"github.com/interfin/interfin-ai-crm/internal/embeddings"
+	"github.com/interfin/interfin-ai-crm/internal/emma"
 	"github.com/interfin/interfin-ai-crm/internal/events"
 	"github.com/interfin/interfin-ai-crm/internal/handlers"
 	"github.com/interfin/interfin-ai-crm/internal/kanban"
@@ -360,6 +361,27 @@ func run(log *slog.Logger) error {
 		Register(api)
 	handlers.NewSettings(handlers.SettingsDeps{Svc: settingsSvc, Log: log}).
 		Register(api)
+
+	// --- EP-01: панель Эммы — /api/emma/* только для admin, поверх PIN
+	// (ТЗ EMMA_PANEL_TZ_v2 §2). Группа живёт внутри /api: rate limit и JWT
+	// наследуются, RequireRole(admin) поверх — manager получает 403 на всё,
+	// включая pin/*. Audit — slog-след мутирующих запросов панели.
+	pinStore := emma.NewRedisStore(rdb)
+	emmaGroup := api.Group("/emma", auth.RequireRole(auth.RoleAdmin), emma.Audit(log))
+	// pin/* — БЕЗ RequirePIN: bootstrap и вход (ТЗ §6).
+	emma.NewPIN(emma.PINDeps{Settings: settingsSvc, Store: pinStore, Log: log}).
+		Register(emmaGroup.Group("/pin"))
+	// Защищённая группа — контракт EP-02…EP-06: ручки вешаются сюда,
+	// ничего про PIN не зная.
+	emmaProtected := emmaGroup.Group("", emma.RequirePIN(pinStore, log))
+	emma.NewStatus(emma.StatusInfo{
+		TelegramTokenSet: cfg.Telegram.BotToken != "",
+		AnthropicKeySet:  cfg.Claude.APIKey != "",
+		Model:            cfg.Claude.Model,
+		WebhookURLSet:    cfg.Telegram.WebhookURL != "",
+	}).Register(emmaProtected)
+	log.Info("emma panel api registered", "model", cfg.Claude.Model)
+
 	log.Info("rest api registered",
 		"rate_limit_per_min", cfg.Server.RateLimitPerMin,
 		"lgpd_retention_days", cfg.LGPD.RetentionDays)

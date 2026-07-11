@@ -12,6 +12,7 @@ import (
 // 401/403 отдаёт auth-middleware M7 (ERR_TOKEN_*, ERR_FORBIDDEN).
 const (
 	codeValidation        = "ERR_VALIDATION"         // 400: невалидные поля
+	codeUnknownKey        = "ERR_UNKNOWN_KEY"        // 400: PATCH /api/settings с неизвестным ключом (EP-01)
 	codeInvalidTransition = "ERR_INVALID_TRANSITION" // 400: переход запрещён §3.1
 	codeNotFound          = "ERR_NOT_FOUND"          // 404
 	codeStageConflict     = "ERR_STAGE_CONFLICT"     // 409: state conflict
