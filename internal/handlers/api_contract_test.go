@@ -95,6 +95,10 @@ func (f *apiLeads) UpdateFields(_ context.Context, id int64, fields map[string]i
 			lead.TakenBy = &id
 		}
 	}
+	if v, ok := fields["language"]; ok { // M14: ручная смена языка
+		code := v.(string)
+		lead.Language = &code
+	}
 	return nil
 }
 func (f *apiLeads) TransitionStage(context.Context, int64, int16, int16) (bool, error) {
@@ -141,6 +145,10 @@ type apiMsgs struct{ s *apiStore }
 
 func (f *apiMsgs) CreateInbound(context.Context, *models.Message) error {
 	panic("не зовётся из /api")
+}
+
+func (f *apiMsgs) CreateInboundSetLanguage(context.Context, *models.Message, string) (bool, error) {
+	panic("не зовётся из /api (детекция языка — контур ingestion M14)")
 }
 
 // CreateOutbound зеркалит боевой messageRepo: строка получает id, счётчики
@@ -369,6 +377,8 @@ func newAPIRig(t *testing.T, leads ...*models.Lead) *apiRig {
 	// M13: режим диалога и настройки — как в cmd/server.
 	NewTakeover(TakeoverDeps{Leads: &apiLeads{s: store}, Pub: pub, Log: log}).Register(api)
 	NewSettings(SettingsDeps{Svc: settingsSvc, Log: log}).Register(api)
+	// M14: язык клиента — как в cmd/server.
+	NewLanguage(LanguageDeps{Leads: &apiLeads{s: store}, Pub: pub, Log: log}).Register(api)
 
 	return &apiRig{
 		router:   r,

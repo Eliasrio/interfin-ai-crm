@@ -101,6 +101,8 @@ export function makeLead(overrides = {}) {
     dialog_mode: 'bot', // M13: зеркалит DEFAULT 'bot' в DTO
     bot_silenced_until: null,
     taken_by: null,
+    language: null, // M14: null = язык ещё не определён
+
     last_activity_at: new Date().toISOString(),
     created_at: new Date().toISOString(),
     ...overrides,

@@ -121,7 +121,10 @@ func (f *wsLeads) TransitionStage(_ context.Context, id int64, from, to int16) (
 
 type wsMsgs struct{}
 
-func (wsMsgs) CreateInbound(context.Context, *models.Message) error  { panic("не зовётся") }
+func (wsMsgs) CreateInbound(context.Context, *models.Message) error { panic("не зовётся") }
+func (wsMsgs) CreateInboundSetLanguage(context.Context, *models.Message, string) (bool, error) {
+	panic("не зовётся")
+}
 func (wsMsgs) CreateOutbound(context.Context, *models.Message) error { return nil }
 func (wsMsgs) ListByLead(context.Context, int64, int) ([]models.Message, error) {
 	return nil, nil

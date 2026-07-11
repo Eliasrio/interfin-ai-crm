@@ -103,6 +103,13 @@ export function patchMode(id, mode) {
   return apiFetch(`/api/leads/${id}/mode`, { method: 'PATCH', body: { mode } })
 }
 
+// --- Ручки M14 (язык клиента; контракт — tasks/M14_languages.md) ---
+
+// patchLanguage — ручная смена языка лида (детектор ошибся).
+export function patchLanguage(id, language) {
+  return apiFetch(`/api/leads/${id}/language`, { method: 'PATCH', body: { language } })
+}
+
 export function fetchSettings() {
   return apiFetch('/api/settings')
 }

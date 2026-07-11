@@ -1,5 +1,7 @@
 // LeadCard — карточка на доске: имя, счётчик сообщений и индикаторы
-// TTL / anti-spam / эскалации / платежа (задачи M10-2, M10-4).
+// TTL / anti-spam / эскалации / платежа (задачи M10-2, M10-4);
+// бейдж языка клиента (M14, live по WS lead_language).
+import { languageBadge } from '../lib/language.js'
 import { stageById } from '../lib/stages.js'
 
 export default function LeadCard({ lead, onOpen }) {
@@ -21,6 +23,11 @@ export default function LeadCard({ lead, onOpen }) {
         {lead.phone && <span>📞 {lead.phone}</span>}
       </div>
       <div className="card-badges">
+        {languageBadge(lead.language) && (
+          <span className="badge" data-testid="lang-badge" title="язык клиента (M14)">
+            {languageBadge(lead.language)}
+          </span>
+        )}
         {ttl && (
           <span className={'badge' + (lead.ttlWarning ? ' badge-warn' : '')} title="TTL стадии (§3.4)">
             ⏳ {ttl}

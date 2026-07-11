@@ -3,6 +3,7 @@ module github.com/interfin/interfin-ai-crm
 go 1.22
 
 require (
+	github.com/abadojack/whatlanggo v1.0.1
 	github.com/gin-gonic/gin v1.10.0
 	github.com/golang-jwt/jwt/v5 v5.2.2
 	github.com/golang-migrate/migrate/v4 v4.17.1

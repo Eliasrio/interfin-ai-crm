@@ -139,6 +139,7 @@ type Lead struct {
 	EscalatedAt      *time.Time     `gorm:"column:escalated_at"` // AQ²-fix #8
 	ConsentGivenAt   *time.Time     `gorm:"column:consent_given_at"`
 	DialogMode       string         `gorm:"column:dialog_mode;default:bot"` // M13: bot | human (CHECK в БД); default обязателен — без него GORM вставлял бы '' мимо DEFAULT БД
+	Language         *string        `gorm:"column:language"`                // M14: ru | en | es (CHECK в БД); NULL = не определён (лид не прислал текста) — везде fallback ru
 	BotSilencedUntil *time.Time     `gorm:"column:bot_silenced_until"`      // M13: пауза автопилота; NULL/прошлое = не молчит
 	TakenBy          *int64         `gorm:"column:taken_by"`                // M13: id менеджера, взявшего диалог
 	DeletedAt        gorm.DeletedAt `gorm:"column:deleted_at"`              // LGPD erasure = soft delete; выборки сами исключают стёртых

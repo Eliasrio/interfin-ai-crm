@@ -8,6 +8,7 @@ import { MANUAL_TARGETS, stageById } from '../lib/stages.js'
 import { useStore } from '../hooks.js'
 import { displayName } from './LeadCard.jsx'
 import ChatPanel from './ChatPanel.jsx'
+import LanguageSelect from './LanguageSelect.jsx'
 import LgpdPanel from './LgpdPanel.jsx'
 import ModeBar from './ModeBar.jsx'
 
@@ -50,6 +51,8 @@ export default function LeadModal({ leadId, role, onClose, onMoveLead }) {
               #{lead.id} · стадия {lead.stage_id}. {stage?.title} · 💬 {lead.message_count}
               {lead.tg_username && <> · @{lead.tg_username}</>}
               {lead.phone && <> · {lead.phone}</>}
+              {' · '}
+              <LanguageSelect lead={lead} />
             </div>
           </div>
           <button className="btn btn-ghost" onClick={onClose} aria-label="Закрыть">

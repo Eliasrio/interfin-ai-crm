@@ -158,6 +158,10 @@ func (f *fakeMsgs) CreateInbound(_ context.Context, m *models.Message) error {
 	return nil
 }
 
+func (f *fakeMsgs) CreateInboundSetLanguage(context.Context, *models.Message, string) (bool, error) {
+	panic("детекция языка — контур ingestion (M14), воркер её не зовёт")
+}
+
 func (f *fakeMsgs) CreateOutbound(_ context.Context, m *models.Message) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

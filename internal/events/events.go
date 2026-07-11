@@ -40,6 +40,7 @@ const (
 	TypeMessage           = "message"            // M12: новая строка в messages (чат живой в обе стороны)
 	TypeDialogMode        = "dialog_mode"        // M13: смена режима диалога (bot/human/пауза автопилота)
 	TypeTakeoverReminder  = "takeover_reminder"  // M13: клиент ждёт ответа менеджера reminder_minutes
+	TypeLeadLanguage      = "lead_language"      // M14: язык лида определён (ingestion) или сменён менеджером
 )
 
 // Event — единица канала crm:events. Одна структура на все типы:
@@ -79,6 +80,10 @@ type Event struct {
 
 	// Только для takeover_reminder (M13).
 	WaitingMinutes int `json:"waiting_minutes,omitempty"` // сколько минут клиент ждёт ответа
+
+	// Только для lead_language (M14): текущий язык лида целиком (ru|en|es),
+	// как dialog_mode — клиент не собирает состояние из дельт.
+	Language string `json:"language,omitempty"`
 
 	Reason string    `json:"reason,omitempty"` // человекочитаемый триггер (лог/отладка)
 	TS     time.Time `json:"ts"`               // клиент хранит как last_event_ts для catch-up §10.3
@@ -120,6 +125,23 @@ func DialogModeEvent(l *models.Lead, reason string) Event {
 		SilencedUntil: l.BotSilencedUntil,
 		TakenBy:       l.TakenBy,
 		Reason:        reason,
+	}
+}
+
+// LeadLanguageEvent собирает событие lead_language (M14) — единая точка для
+// обоих публикаторов (автодетекция в ingestion, ручная смена PATCH-ручкой).
+// По образцу dialog_mode: событие несёт состояние целиком.
+func LeadLanguageEvent(l *models.Lead, reason string) Event {
+	language := ""
+	if l.Language != nil {
+		language = *l.Language
+	}
+	return Event{
+		Type:     TypeLeadLanguage,
+		LeadID:   l.ID,
+		StageID:  l.StageID,
+		Language: language,
+		Reason:   reason,
 	}
 }
 

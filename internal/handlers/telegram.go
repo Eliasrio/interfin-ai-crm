@@ -18,12 +18,14 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	tele "gopkg.in/telebot.v3"
 
 	"github.com/interfin/interfin-ai-crm/internal/events"
+	"github.com/interfin/interfin-ai-crm/internal/lang"
 	"github.com/interfin/interfin-ai-crm/internal/models"
 	"github.com/interfin/interfin-ai-crm/internal/queue"
 	"github.com/interfin/interfin-ai-crm/internal/repo"
@@ -141,7 +143,34 @@ func (h *TelegramWebhook) SaveAndReturn200() gin.HandlerFunc {
 			LeadID:  lead.ID,
 			Content: textOf(msg),
 		}
-		if err := h.msgs.CreateInbound(ctx, inbound); err != nil {
+
+		// M14: первый ТЕКСТОВЫЙ inbound лида без языка — детекция и запись
+		// той же транзакцией, что и сообщение. Нетекстовое (content пуст)
+		// язык не выставляет; детекция локальная — правило «200 немедленно»
+		// (CLAUDE.md §4.4) не нарушается.
+		if lead.Language == nil && strings.TrimSpace(inbound.Content) != "" {
+			detected := lang.Detect(inbound.Content)
+			langSet, err := h.msgs.CreateInboundSetLanguage(ctx, inbound, detected)
+			if err != nil {
+				h.abortSaveFailed(c, "webhook: сообщение не сохранено", err,
+					slog.Int64("lead_id", lead.ID))
+				return
+			}
+			if langSet {
+				lead.Language = &detected
+				// Fire-and-forget, как всё в crm:events: пропуск клиент
+				// добирает срезом GET /api/leads (§10.3).
+				if h.pub != nil {
+					if err := h.pub.Publish(ctx,
+						events.LeadLanguageEvent(lead, "autodetect first inbound")); err != nil {
+						h.log.Warn("webhook: событие lead_language не опубликовано",
+							"lead_id", lead.ID, "error", err)
+					}
+				}
+				h.log.Info("webhook: язык лида определён",
+					"lead_id", lead.ID, "language", detected)
+			}
+		} else if err := h.msgs.CreateInbound(ctx, inbound); err != nil {
 			h.abortSaveFailed(c, "webhook: сообщение не сохранено", err,
 				slog.Int64("lead_id", lead.ID))
 			return

@@ -106,6 +106,7 @@ func (f *fakeLeads) List(context.Context, repo.ListLeadsParams) ([]models.Lead, 
 type fakeMsgs struct {
 	inbound    []*models.Message
 	inboundErr error
+	langSets   []string // M14: языки, записанные CreateInboundSetLanguage
 }
 
 func (f *fakeMsgs) CreateInbound(_ context.Context, msg *models.Message) error {
@@ -116,6 +117,17 @@ func (f *fakeMsgs) CreateInbound(_ context.Context, msg *models.Message) error {
 	msg.Direction = models.DirectionInbound
 	f.inbound = append(f.inbound, msg)
 	return nil
+}
+
+// CreateInboundSetLanguage — фейк фиксирует запись и отвечает true (guard
+// «language IS NULL» живёт в боевом репозитории); повторных вызовов не
+// бывает — хендлер проверяет lead.Language до вызова.
+func (f *fakeMsgs) CreateInboundSetLanguage(ctx context.Context, msg *models.Message, language string) (bool, error) {
+	if err := f.CreateInbound(ctx, msg); err != nil {
+		return false, err
+	}
+	f.langSets = append(f.langSets, language)
+	return true, nil
 }
 
 func (f *fakeMsgs) CreateOutbound(_ context.Context, msg *models.Message) error {
@@ -282,11 +294,17 @@ func TestSaveAndReturn200_NewLead(t *testing.T) {
 		t.Errorf("enqueue с неверными аргументами: %+v", e.queue.calls[0])
 	}
 
-	// M12: inbound ушёл событием message (чат менеджера живой в обе стороны).
-	if len(e.pub.events) != 1 {
-		t.Fatalf("ожидали одно событие message, опубликовано %d", len(e.pub.events))
+	// M12+M14: первый текстовый inbound уходит двумя событиями —
+	// lead_language (детекция) и message (чат менеджера живой).
+	if len(e.pub.events) != 2 {
+		t.Fatalf("ожидали события lead_language+message, опубликовано %d: %+v",
+			len(e.pub.events), e.pub.events)
 	}
-	ev := e.pub.events[0]
+	lang := e.pub.events[0]
+	if lang.Type != events.TypeLeadLanguage || lang.LeadID != lead.ID || lang.Language != "ru" {
+		t.Errorf("событие lead_language собрано неверно: %+v", lang)
+	}
+	ev := e.pub.events[1]
 	if ev.Type != events.TypeMessage || ev.LeadID != lead.ID ||
 		ev.Direction != models.DirectionInbound || ev.Author != "" ||
 		ev.Content != "Привет, хочу открыть счёт" || ev.StageID != lead.StageID {

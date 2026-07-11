@@ -166,7 +166,19 @@ func (r *leadRepo) TransitionStage(ctx context.Context, id int64, from, to int16
 type messageRepo struct{ db *gorm.DB }
 
 func (r *messageRepo) CreateInbound(ctx context.Context, msg *models.Message) error {
+	_, err := r.createInbound(ctx, msg, "")
+	return err
+}
+
+func (r *messageRepo) CreateInboundSetLanguage(ctx context.Context, msg *models.Message, language string) (bool, error) {
+	return r.createInbound(ctx, msg, language)
+}
+
+// createInbound — общее ядро: language == "" — обычный inbound; иначе той же
+// транзакцией leads.language = language при language IS NULL (M14).
+func (r *messageRepo) createInbound(ctx context.Context, msg *models.Message, language string) (bool, error) {
 	msg.Direction = models.DirectionInbound
+	langSet := false
 	// Транзакция: сообщение и счётчики лида меняются атомарно, инкремент —
 	// выражением в SQL, а не read-modify-write (конкурентные inbound не теряются).
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -186,12 +198,23 @@ func (r *messageRepo) CreateInbound(ctx context.Context, msg *models.Message) er
 		if res.RowsAffected == 0 {
 			return fmt.Errorf("bump lead counters: lead %d: %w", msg.LeadID, ErrNotFound)
 		}
+		if language != "" {
+			// Guard language IS NULL: детекция срабатывает один раз, повторная
+			// (гонка первых сообщений, ретрай) — no-op с langSet=false.
+			res := tx.Model(&models.Lead{}).
+				Where("id = ? AND language IS NULL", msg.LeadID).
+				Update("language", language)
+			if res.Error != nil {
+				return fmt.Errorf("set lead language: %w", res.Error)
+			}
+			langSet = res.RowsAffected > 0
+		}
 		return nil
 	})
 	if err != nil {
-		return fmt.Errorf("repo: create inbound message: %w", err)
+		return false, fmt.Errorf("repo: create inbound message: %w", err)
 	}
-	return nil
+	return langSet, nil
 }
 
 func (r *messageRepo) CreateOutbound(ctx context.Context, msg *models.Message) error {

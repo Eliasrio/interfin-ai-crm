@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/interfin/interfin-ai-crm/internal/lang"
 	"github.com/interfin/interfin-ai-crm/internal/repo"
 )
 
@@ -24,7 +25,7 @@ const systemPrompt = `Ты — Эмма, менеджер сервиса «Св�
 инвестиции и др.) — детали в базе знаний.
 
 Правила:
-- Отвечай на русском, тепло, вежливо и по существу. Коротко: 1–3 абзаца,
+- Отвечай тепло, вежливо и по существу. Коротко: 1–3 абзаца,
   это переписка в мессенджере.
 - Твоя задача — квалифицировать клиента. Мягко, по ходу живого диалога
   (не анкетой) выясни: 1) гражданство клиента и членов семьи; 2) сколько
@@ -49,10 +50,51 @@ const systemPrompt = `Ты — Эмма, менеджер сервиса «Св�
 - Если клиент просит удалить его данные — объясни, что запрос передан
   менеджеру (право на удаление по LGPD).`
 
+// languageNames — язык лида → название для языковой инструкции system-блока.
+var languageNames = map[string]string{
+	lang.RU: "русском",
+	lang.EN: "английском",
+	lang.ES: "испанском",
+}
+
+// languageInstruction — языковая вставка system-блока (M14): язык из карточки
+// лида, NULL → ru (fallback: основная аудитория русскоязычная). Вставка
+// короткая — system-блок остаётся в бюджете §7.2 (следит Budgeter.Build).
+func languageInstruction(language *string) string {
+	name := languageNames[leadLanguage(language)]
+	return "Отвечай на " + name + " языке; если клиент явно просит другой язык " +
+		"из тройки (русский/английский/испанский) — переходи на него, " +
+		"но язык в карточке лида меняет менеджер."
+}
+
+// leadLanguage — код языка лида с fallback ru (NULL = ещё не определён).
+func leadLanguage(language *string) string {
+	if language != nil && lang.Valid(*language) {
+		return *language
+	}
+	return lang.RU
+}
+
 // nonTextReply — детерминированный ответ на входящие без текста (голосовые,
 // стикеры, фото): Claude в этом случае не вызывается (см. processor.go 3.5).
+// Русская версия — fallback; выбор по языку лида — nonTextReplyFor (M14).
 const nonTextReply = `Извините, я пока понимаю только текстовые сообщения 🙏
 Напишите, пожалуйста, ваш вопрос текстом — и я сразу отвечу.`
+
+// nonTextReplies — локализации подсказки о нетекстовом (M14): три языка,
+// перевод детерминированный (Claude для подсказки не вызывается).
+var nonTextReplies = map[string]string{
+	lang.RU: nonTextReply,
+	lang.EN: `Sorry, I can only understand text messages for now 🙏
+Please type your question as text — and I will reply right away.`,
+	lang.ES: `Perdón, por ahora solo entiendo mensajes de texto 🙏
+Escriba su pregunta como texto, por favor — y le responderé enseguida.`,
+}
+
+// nonTextReplyFor — подсказка на языке лида (NULL → ru).
+func nonTextReplyFor(language *string) string {
+	return nonTextReplies[leadLanguage(language)]
+}
 
 // composeSystemPrompt приклеивает к базовому промпту найденные RAG-чанки
 // (M4 §7.1). Пусто (rag_miss или RAG выключен) — возвращает базу как есть:

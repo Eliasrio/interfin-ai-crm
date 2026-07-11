@@ -355,6 +355,9 @@ func run(log *slog.Logger) error {
 	// --- M13: human takeover — режим диалога и настройки интервалов ---
 	handlers.NewTakeover(handlers.TakeoverDeps{Leads: leads, Pub: pub, Log: log}).
 		Register(api)
+	// --- M14: язык клиента — ручная смена, если детектор ошибся ---
+	handlers.NewLanguage(handlers.LanguageDeps{Leads: leads, Pub: pub, Log: log}).
+		Register(api)
 	handlers.NewSettings(handlers.SettingsDeps{Svc: settingsSvc, Log: log}).
 		Register(api)
 	log.Info("rest api registered",

@@ -74,6 +74,7 @@ type leadDTO struct {
 	DialogMode       string     `json:"dialog_mode"`                  // M13: bot | human
 	BotSilencedUntil *time.Time `json:"bot_silenced_until,omitempty"` // M13: пауза автопилота
 	TakenBy          *int64     `json:"taken_by,omitempty"`           // M13: кто взял диалог
+	Language         *string    `json:"language"`                     // M14: ru | en | es; null = не определён
 	LastActivityAt   time.Time  `json:"last_activity_at"`
 	CreatedAt        time.Time  `json:"created_at"`
 }
@@ -94,6 +95,7 @@ func toLeadDTO(l *models.Lead) leadDTO {
 		DialogMode:       l.DialogMode,
 		BotSilencedUntil: l.BotSilencedUntil,
 		TakenBy:          l.TakenBy,
+		Language:         l.Language,
 		LastActivityAt:   l.LastActivityAt,
 		CreatedAt:        l.CreatedAt,
 	}

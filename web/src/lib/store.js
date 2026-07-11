@@ -166,6 +166,10 @@ export function applyEvent(ev) {
       // M13: клиент ждёт ответа менеджера.
       addAlert('warn', `${who} ждёт ответа ${ev.waiting_minutes} мин — ответьте или Эмма подхватит`)
       break
+    case 'lead_language':
+      // M14: событие несёт язык целиком (автодетекция или ручная смена).
+      upd.language = ev.language || null
+      break
     default:
       // Неизвестный тип события — вперёд-совместимость: молча пропускаем.
       commit({ ...state, lastEventTs })

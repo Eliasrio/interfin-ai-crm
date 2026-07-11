@@ -63,6 +63,12 @@ type MessageRepo interface {
 	// direction='inbound' и у лида message_count+1, anti_spam_count+1,
 	// last_activity_at=NOW(). Только inbound двигает счётчики (CLAUDE.md §4.3).
 	CreateInbound(ctx context.Context, msg *models.Message) error
+	// CreateInboundSetLanguage — как CreateInbound, плюс ТОЙ ЖЕ транзакцией
+	// выставляет leads.language = language, если он ещё NULL (M14: детекция
+	// первого текстового inbound). Гонку двух первых сообщений решает guard
+	// WHERE language IS NULL: язык записывает ровно одна транзакция —
+	// langSet=true, вызывающий публикует WS-событие lead_language.
+	CreateInboundSetLanguage(ctx context.Context, msg *models.Message, language string) (langSet bool, err error)
 	// CreateOutbound вставляет ответ бота/менеджера. Счётчики НЕ трогает.
 	CreateOutbound(ctx context.Context, msg *models.Message) error
 	// ListByLead — последние limit сообщений лида, от старых к новым

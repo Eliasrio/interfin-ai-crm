@@ -178,14 +178,17 @@ func (p *Processor) HandleProcessInbound(ctx context.Context, t *asynq.Task) err
 		if dropped, err := p.dropIfSilenced(ctx, lead, payload.MsgID, log); err != nil || dropped {
 			return err
 		}
-		tokens := estimateTokens(nonTextReply)
+		// M14: подсказка на языке лида (NULL → ru). Ретрай упавшего Send
+		// переотправит сохранённый локализованный текст веткой выше.
+		reply := nonTextReplyFor(lead.Language)
+		tokens := estimateTokens(reply)
 		author := models.AuthorBot
-		out := &models.Message{LeadID: lead.ID, Author: &author, Content: nonTextReply, Tokens: &tokens}
+		out := &models.Message{LeadID: lead.ID, Author: &author, Content: reply, Tokens: &tokens}
 		if err := d.Msgs.CreateOutbound(ctx, out); err != nil {
 			return fmt.Errorf("worker: сохранение подсказки о нетекстовом: %w", err)
 		}
 		p.publishMessage(ctx, out, lead.StageID, log)
-		if err := d.Sender.Send(lead.TelegramUserID, nonTextReply); err != nil {
+		if err := d.Sender.Send(lead.TelegramUserID, reply); err != nil {
 			return fmt.Errorf("worker: отправка подсказки о нетекстовом: %w", err)
 		}
 		log.Info("worker: нетекстовое входящее — отправлена подсказка, Claude не вызывался")
@@ -208,8 +211,11 @@ func (p *Processor) HandleProcessInbound(ctx context.Context, t *asynq.Task) err
 	}
 
 	// 3) Контекст в пределах бюджета §7.2: system+RAG ≤ 2000, summary ≤ 1000.
+	// M14: к базовому промпту приклеивается языковая инструкция по языку
+	// лида (NULL → ru) — Эмма ведёт весь диалог на языке клиента.
 	summary := p.loadSummary(ctx, lead.ID, log)
-	system, msgs, stats, err := d.Budgeter.Build(ctx, composeSystemPrompt(systemPrompt, chunks), summary, history)
+	base := systemPrompt + "\n\n" + languageInstruction(lead.Language)
+	system, msgs, stats, err := d.Budgeter.Build(ctx, composeSystemPrompt(base, chunks), summary, history)
 	if err != nil {
 		return fmt.Errorf("worker: сборка контекста: %w", err)
 	}

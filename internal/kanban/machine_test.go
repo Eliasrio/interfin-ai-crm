@@ -132,6 +132,10 @@ func (f *fakeMsgs) CreateInbound(context.Context, *models.Message) error {
 	panic("state machine не создаёт inbound")
 }
 
+func (f *fakeMsgs) CreateInboundSetLanguage(context.Context, *models.Message, string) (bool, error) {
+	panic("state machine не создаёт inbound (детекция языка — контур ingestion M14)")
+}
+
 func (f *fakeMsgs) CreateOutbound(_ context.Context, m *models.Message) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
