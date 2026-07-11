@@ -159,6 +159,31 @@ type EmmaPromptHistoryItem struct {
 	Style     string    `gorm:"column:style"`
 }
 
+// EmmaKBRepo — emma_kb_files (EP-03, ТЗ панели §3): файлы базы знаний панели.
+type EmmaKBRepo interface {
+	// List — все файлы, новые → старые.
+	List(ctx context.Context) ([]models.EmmaKBFile, error)
+	// GetByID — файл по id. ErrNotFound, если нет.
+	GetByID(ctx context.Context, id int64) (*models.EmmaKBFile, error)
+	// UpsertByFilename вставляет строку файла или, при совпадении filename,
+	// обновляет существующую (QA-фикс ТЗ §3: id стабилен → source panel:<id>
+	// совпадает → ReplaceSource атомарно заменяет старые чанки). Строка
+	// сбрасывается в pending: новые mime/path/size, index_error NULL,
+	// chunks_count 0. Заполняет f.ID/f.CreatedAt; возвращает file_path
+	// заменённой строки ("" — чистая вставка) — вызывающий удаляет
+	// вытесненный оригинал с диска.
+	UpsertByFilename(ctx context.Context, f *models.EmmaKBFile) (oldPath string, err error)
+	// SetStatus пишет итог индексации: status (модельные константы EmmaKB*),
+	// chunks_count, index_error (nil — сброс). ErrNotFound — строки уже нет
+	// (файл удалили, пока задача стояла в очереди).
+	SetStatus(ctx context.Context, id int64, status string, chunks int, errText *string) error
+	// Delete одной транзакцией вычищает чанки source файла из
+	// knowledge_chunks и удаляет строку (ТЗ §3: [Удалить]). Возвращает
+	// удалённую строку — file_path нужен, чтобы стереть оригинал с диска
+	// ПОСЛЕ коммита. ErrNotFound — нет id.
+	Delete(ctx context.Context, id int64) (*models.EmmaKBFile, error)
+}
+
 // PaymentRepo — payment_events (§8.3).
 type PaymentRepo interface {
 	// Create вставляет событие платёжного gateway. Идемпотентен по

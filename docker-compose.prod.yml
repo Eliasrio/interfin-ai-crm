@@ -32,6 +32,12 @@ x-app-service: &app-service
     # Здесь — только НЕсекретная топология.
     REDIS_SENTINEL_ADDRS: sentinel-1:26379,sentinel-2:26379,sentinel-3:26379
     CRYPTOBOT_USE_TESTNET: "false"
+    # EP-03: файлы панели Эммы (база знаний, файлы для отправки) — на
+    # именованном томе: переживают redeploy и входят в B2-бэкап
+    # (docs/ops/deploy_steps.md, «Дополнение EP-03»).
+    EMMA_DATA_DIR: /app/data/emma
+  volumes:
+    - emma_data:/app/data/emma
   secrets:
     - app_env
     - jwt_private
@@ -60,7 +66,9 @@ services:
     configs:
       - source: nginx_conf
         target: /etc/nginx/nginx.conf
-      - source: nginx_crm_conf
+      # _v2 (EP-03): + client_max_body_size 50m — Swarm-конфиги неизменяемые,
+      # при правке файла имя бампается (см. nginx_default_conf_v2 ниже).
+      - source: nginx_crm_conf_v2
         target: /etc/nginx/conf.d/crm.conf
       # Перекрывает штатную заглушку образа: healthcheck (Host: localhost)
       # иначе ловил её 404 и Swarm вечно рестартовал контейнер.
@@ -337,7 +345,7 @@ services:
 configs:
   nginx_conf:
     file: ./ops/nginx/nginx.conf
-  nginx_crm_conf:
+  nginx_crm_conf_v2:
     file: ./ops/nginx/conf.d/crm.conf
   nginx_default_conf_v2:
     file: ./ops/nginx/conf.d/default.conf
@@ -412,6 +420,9 @@ networks:
       config: [{subnet: 10.61.3.0/24}]
 
 volumes:
+  # EP-03: оригиналы файлов панели Эммы (data/emma/{kb,files}) — включён
+  # в B2-бэкап (deploy_steps.md), иначе файлы не переживут потерю сервера.
+  emma_data:
   pgdata-primary:
   pgdata-replica:
   redis-master-data:

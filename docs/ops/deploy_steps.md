@@ -291,6 +291,65 @@ docker service scale crm_sentinel-3=1
 
 ✅ Алерт пришёл в Telegram; после восстановления — resolved.
 
+## Дополнение EP-03 — база знаний панели Эммы (при следующем деплое)
+
+EP-03 добавил загрузку файлов базы знаний через панель. На проде это
+требует двух вещей; сам деплой эпика делается обычным путём («Эксплуатация»
+ниже), эти шаги — вместе с ним.
+
+### 1. nginx: лимит тела запроса 50 МБ
+
+`ops/nginx/conf.d/crm.conf` уже содержит `client_max_body_size 50m`
+(без него загрузка файла умирала бы на дефолтном 1 МБ nginx ещё до
+приложения). Swarm-конфиги неизменяемые, поэтому в docker-compose.prod.yml
+конфиг переименован `nginx_crm_conf` → `nginx_crm_conf_v2` — обычный
+`docker stack deploy` подхватит новое содержимое сам. Старый конфиг можно
+удалить после деплоя:
+
+```bash
+docker config rm crm_nginx_crm_conf || true
+```
+
+✅ Загрузка файла ~40 МБ через панель проходит (не 413 от nginx);
+   51 МБ — 413 уже от приложения, `{"code":"FILE_TOO_LARGE"}`.
+
+### 2. B2-бэкап тома emma_data
+
+Сейчас в B2 уезжают только БД/WAL (wal-g). Оригиналы файлов панели живут
+на именованном томе `crm_emma_data` — без бэкапа они не переживут потерю
+сервера (ТЗ §2.3). Добавить на хосте суточный tar-бэкап тома рядом с
+wal-g (тот же бакет-аккаунт B2, отдельный префикс `emma-data/`):
+
+```bash
+cat > /usr/local/bin/backup-emma-data.sh <<'SH'
+#!/bin/sh
+# Суточный бэкап файлов панели Эммы (EP-03) в B2 (S3-совместимый API).
+set -eu
+VOL=/var/lib/docker/volumes/crm_emma_data/_data
+TS=$(date +%F)
+set -a; . /etc/interfin/walg.env; set +a   # те же ключи, что у wal-g
+tar -C "$VOL" -czf "/tmp/emma-data-$TS.tar.gz" .
+aws s3 cp "/tmp/emma-data-$TS.tar.gz" \
+  "s3://interfin-crm-wal/emma-data/emma-data-$TS.tar.gz" \
+  --endpoint-url "$AWS_ENDPOINT"
+rm -f "/tmp/emma-data-$TS.tar.gz"
+SH
+chmod +x /usr/local/bin/backup-emma-data.sh
+
+# cron: ежесуточно в 03:30 (после ночного backup-push wal-g)
+echo '30 3 * * * root /usr/local/bin/backup-emma-data.sh' \
+  > /etc/cron.d/backup-emma-data
+```
+
+Восстановление: распаковать архив в том до старта стека
+(`tar -C /var/lib/docker/volumes/crm_emma_data/_data -xzf ...`),
+затем в панели прожать [Переиндексировать] по файлам — чанки pgvector
+приезжают из бэкапа БД независимо, но после point-in-time recovery
+статусы и индекс могут разойтись, переиндексация выравнивает.
+
+✅ `aws s3 ls s3://interfin-crm-wal/emma-data/ --endpoint-url $AWS_ENDPOINT`
+   показывает свежий архив.
+
 ## Эксплуатация
 
 - Обновление версии: `git pull && docker compose -f docker-compose.prod.yml build && docker stack deploy -c docker-compose.prod.yml crm` (rolling, start-first).

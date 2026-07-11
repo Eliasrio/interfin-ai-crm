@@ -123,6 +123,12 @@ func (s *Server) RegisterTakeover(h *TakeoverHandlers) {
 	s.mux.HandleFunc(queue.TypeTakeoverPickup, h.HandlePickup)
 }
 
+// RegisterEmmaKB подключает обработчик EP-03: emma:kb:index — RAG-индексация
+// файлов базы знаний панели Эммы. Зовётся до Start.
+func (s *Server) RegisterEmmaKB(h *EmmaKBHandlers) {
+	s.mux.HandleFunc(queue.TypeEmmaKBIndex, h.HandleEmmaKBIndex)
+}
+
 // Start запускает воркер (неблокирующе — asynq.Server.Start).
 func (s *Server) Start() error {
 	if err := s.srv.Start(s.mux); err != nil {

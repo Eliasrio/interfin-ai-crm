@@ -338,6 +338,14 @@ type EmmaKBFile struct {
 
 func (EmmaKBFile) TableName() string { return "emma_kb_files" }
 
+// EmmaKBSource — source чанков файла панели в knowledge_chunks:
+// "panel:<file_id>". Соглашение — контракт навсегда (EP-03): смена формата
+// потеряла бы связь файл↔чанки. С source файлов docs/kb (имена файлов,
+// cmd/index-kb) пространства не пересекаются.
+func EmmaKBSource(fileID int64) string {
+	return "panel:" + strconv.FormatInt(fileID, 10)
+}
+
 // EmmaSendFile — файл, который Эмма отправляет клиентам (0018).
 // IsActive задавать явно при Create: zero value затёр бы DEFAULT TRUE
 // схемы (грабля M5, как Manager.Active).

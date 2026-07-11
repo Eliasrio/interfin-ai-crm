@@ -41,6 +41,7 @@ const (
 	TypeDialogMode        = "dialog_mode"        // M13: смена режима диалога (bot/human/пауза автопилота)
 	TypeTakeoverReminder  = "takeover_reminder"  // M13: клиент ждёт ответа менеджера reminder_minutes
 	TypeLeadLanguage      = "lead_language"      // M14: язык лида определён (ingestion) или сменён менеджером
+	TypeEmmaKBStatus      = "emma_kb_status"     // EP-03: финал индексации файла базы знаний панели
 )
 
 // Event — единица канала crm:events. Одна структура на все типы:
@@ -84,6 +85,14 @@ type Event struct {
 	// Только для lead_language (M14): текущий язык лида целиком (ru|en|es),
 	// как dialog_mode — клиент не собирает состояние из дельт.
 	Language string `json:"language,omitempty"`
+
+	// Только для emma_kb_status (EP-03): итог индексации файла базы знаний.
+	// LeadID/StageID нулевые — событие не про лида; фронт матчит по type.
+	FileID   int64  `json:"file_id,omitempty"`
+	Filename string `json:"filename,omitempty"`
+	KBStatus string `json:"status,omitempty"` // indexed | error
+	Chunks   int    `json:"chunks,omitempty"`
+	KBError  string `json:"error,omitempty"`
 
 	Reason string    `json:"reason,omitempty"` // человекочитаемый триггер (лог/отладка)
 	TS     time.Time `json:"ts"`               // клиент хранит как last_event_ts для catch-up §10.3
@@ -143,6 +152,24 @@ func LeadLanguageEvent(l *models.Lead, reason string) Event {
 		Language: language,
 		Reason:   reason,
 	}
+}
+
+// EmmaKBStatusEvent — финал индексации файла базы знаний (EP-03): фронт
+// EP-07 обновляет строку таблицы без поллинга. Публикуется ТОЛЬКО на финале
+// (indexed/error) — промежуточный pending фронт видит из ответа upload'а.
+// Старые клиенты игнорируют незнакомый тип (проверено M12).
+func EmmaKBStatusEvent(fileID int64, filename, status string, chunks int, indexErr *string) Event {
+	e := Event{
+		Type:     TypeEmmaKBStatus,
+		FileID:   fileID,
+		Filename: filename,
+		KBStatus: status,
+		Chunks:   chunks,
+	}
+	if indexErr != nil {
+		e.KBError = *indexErr
+	}
+	return e
 }
 
 // Publisher — контракт публикации для бизнес-логики (в тестах — фейк).

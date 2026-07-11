@@ -78,6 +78,12 @@ func run(log *slog.Logger) error {
 	}
 	log.Info("config loaded", "path", configPath, "port", cfg.Server.Port)
 
+	// EP-03: файловое хранилище панели Эммы — kb/ (база знаний) и files/
+	// (EP-04) должны существовать до первого upload'а и задачи индексации.
+	if err := cfg.Emma.EnsureDirs(); err != nil {
+		return err
+	}
+
 	// --- Postgres: единый пул GORM/pgx, ТОЛЬКО SimpleProtocol (CLAUDE.md §4.2) ---
 	gormDB, err := db.Open(cfg.Database)
 	if err != nil {
@@ -101,6 +107,8 @@ func run(log *slog.Logger) error {
 	settingsSvc := settings.New(repo.NewSettings(gormDB))
 	// EP-02: версии системного промпта Эммы (панель, вкладка 1, таблица 0016).
 	emmaPrompts := repo.NewEmmaPrompts(gormDB)
+	// EP-03: файлы базы знаний панели (вкладка 2, таблица 0017).
+	emmaKB := repo.NewEmmaKB(gormDB)
 
 	// --- Redis: одиночный (dev) или Sentinel (prod), по конфигу ---
 	var rdb redis.UniversalClient
@@ -243,6 +251,15 @@ func run(log *slog.Logger) error {
 	wrk.RegisterKanban(worker.NewKanbanHandlers(machine, log))
 	// M8 §9.1: retention-cron — обработчик и суточный планировщик.
 	wrk.RegisterLGPD(worker.NewLGPDHandlers(lgpdRepo, cfg.LGPD.RetentionDays, log))
+	// EP-03: RAG-индексация файлов базы знаний панели — тот же Indexer,
+	// что у cmd/index-kb (source panel:<id> не пересекается с docs/kb),
+	// тот же publisher WS-событий, что у Kanban.
+	wrk.RegisterEmmaKB(worker.NewEmmaKBHandlers(worker.EmmaKBDeps{
+		Files:   emmaKB,
+		Indexer: rag.NewIndexer(embedder, knowledge, log),
+		Pub:     pub,
+		Log:     log,
+	}))
 	// M13: напоминания об ожидающих клиентах и подхват Эммы (LOGIC-01).
 	wrk.RegisterTakeover(worker.NewTakeoverHandlers(worker.TakeoverDeps{
 		Leads:         leads,
@@ -391,6 +408,14 @@ func run(log *slog.Logger) error {
 		Prompts:  emmaPrompts,
 		Settings: settingsSvc,
 		Log:      log,
+	}).Register(emmaProtected)
+	// EP-03: база знаний (вкладка 2) — загрузка/список/reindex/удаление;
+	// индексацию исполняет asynq-воркер выше.
+	emma.NewKB(emma.KBDeps{
+		Files: emmaKB,
+		Enq:   q,
+		KBDir: cfg.Emma.KBDir(),
+		Log:   log,
 	}).Register(emmaProtected)
 	log.Info("emma panel api registered", "model", cfg.Claude.Model)
 

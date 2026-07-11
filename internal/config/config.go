@@ -6,9 +6,11 @@ package config
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -31,6 +33,34 @@ type Config struct {
 	RAG        RAGConfig        `mapstructure:"rag"`
 	LGPD       LGPDConfig       `mapstructure:"lgpd"`
 	Monitoring MonitoringConfig `mapstructure:"monitoring"`
+	Emma       EmmaConfig       `mapstructure:"emma"`
+}
+
+// EmmaConfig — файловое хранилище панели Эммы (EP-03, ТЗ §2.3).
+// DataDir — корень вне web-root: <dir>/kb — оригиналы базы знаний,
+// <dir>/files — файлы для отправки клиентам (EP-04, каталог создаётся заранее).
+type EmmaConfig struct {
+	DataDir string `mapstructure:"data_dir"` // EMMA_DATA_DIR, дефолт ./data/emma
+}
+
+// KBDir — каталог оригиналов базы знаний (имена файлов — UUID, ТЗ §2.3).
+func (e EmmaConfig) KBDir() string { return filepath.Join(e.DataDir, "kb") }
+
+// FilesDir — каталог файлов для отправки клиентам (код — EP-04).
+func (e EmmaConfig) FilesDir() string { return filepath.Join(e.DataDir, "files") }
+
+// EnsureDirs создаёт kb/ и files/ при старте процесса (task EP-03 §1):
+// воркер и ручки панели рассчитывают, что каталоги существуют.
+func (e EmmaConfig) EnsureDirs() error {
+	if e.DataDir == "" {
+		return errors.New("config: emma.data_dir пуст (EMMA_DATA_DIR)")
+	}
+	for _, dir := range []string{e.KBDir(), e.FilesDir()} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("config: создание каталога панели %s: %w", dir, err)
+		}
+	}
+	return nil
 }
 
 type ServerConfig struct {
@@ -203,6 +233,9 @@ var defaultEnv = map[string]string{
 	// M6: не задан — работаем в testnet; боевой режим включается только
 	// явным CRYPTOBOT_USE_TESTNET=false (безопасный дефолт для dev).
 	"CRYPTOBOT_USE_TESTNET": "true",
+	// EP-03: корень файлового хранилища панели Эммы (ТЗ §2.3); в Docker
+	// поверх него монтируется volume emma_data.
+	"EMMA_DATA_DIR": "./data/emma",
 }
 
 var envPlaceholder = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)

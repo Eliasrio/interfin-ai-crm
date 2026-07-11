@@ -158,7 +158,10 @@ type rig struct {
 	store    Store
 	settings *settings.Service
 	repo     *memSettingsRepo
-	prompts  *memPromptRepo // EP-02
+	prompts  *memPromptRepo  // EP-02
+	kb       *memKBRepo      // EP-03
+	kbEnq    *fakeKBEnqueuer // EP-03
+	kbDir    string          // EP-03: t.TempDir()
 }
 
 func newRig(t *testing.T, store Store) *rig {
@@ -193,6 +196,12 @@ func newRig(t *testing.T, store Store) *rig {
 	prompts := newMemPromptRepo()
 	NewPrompt(PromptDeps{Prompts: prompts, Settings: settingsSvc, Log: log}).
 		Register(protected)
+	// EP-03: база знаний — на той же защищённой группе.
+	kbRepo := newMemKBRepo()
+	kbEnq := &fakeKBEnqueuer{}
+	kbDir := t.TempDir()
+	NewKB(KBDeps{Files: kbRepo, Enq: kbEnq, KBDir: kbDir, Log: log}).
+		Register(protected)
 
 	return &rig{
 		router:   r,
@@ -201,6 +210,9 @@ func newRig(t *testing.T, store Store) *rig {
 		settings: settingsSvc,
 		repo:     memRepo,
 		prompts:  prompts,
+		kb:       kbRepo,
+		kbEnq:    kbEnq,
+		kbDir:    kbDir,
 	}
 }
 
@@ -277,6 +289,12 @@ var emmaPaths = []struct{ method, path string }{
 	{http.MethodGet, "/api/emma/prompt/history"},
 	{http.MethodGet, "/api/emma/prompt/history/1"},
 	{http.MethodPost, "/api/emma/prompt/history/1/restore"},
+	// EP-03 (критерий приёмки: manager → 403, admin без PIN → 401 на всех
+	// ручках kb).
+	{http.MethodGet, "/api/emma/kb"},
+	{http.MethodPost, "/api/emma/kb"},
+	{http.MethodPost, "/api/emma/kb/1/reindex"},
+	{http.MethodDelete, "/api/emma/kb/1"},
 }
 
 // --- гейты: роль и PIN-сессия (критерий приёмки 2) ---

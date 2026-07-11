@@ -48,6 +48,12 @@ COPY migrations /app/migrations
 COPY --from=webbuild /web/dist /app/web/dist
 # M11: мост «Docker secrets → env» для prod (dev без секрета app_env — no-op).
 COPY ops/docker/app-entrypoint.sh /app/entrypoint.sh
+# EP-03: каталоги файлов панели Эммы создаются В ОБРАЗЕ с владельцем app:
+# свежий именованный том emma_data инициализируется копией этого пути
+# (включая владельца). Без этого том был бы root-owned, а процесс под
+# uid 10001 падал бы на MkdirAll при старте.
+RUN mkdir -p /app/data/emma/kb /app/data/emma/files \
+ && chown -R app:app /app/data
 USER app
 EXPOSE 8080
 

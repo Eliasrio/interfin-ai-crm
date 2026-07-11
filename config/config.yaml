@@ -124,6 +124,11 @@ lgpd:
   # дал бы другой хеш (уникальность выдержит, детерминированность — нет).
   erasure_salt: ${LGPD_SALT}
 
+emma: # EP-03: файловое хранилище панели Эммы (ТЗ §2.3, вне web-root)
+  # <dir>/kb — оригиналы базы знаний (имена UUID), <dir>/files — файлы для
+  # отправки клиентам (EP-04). В Docker сюда монтируется volume emma_data.
+  data_dir: ${EMMA_DATA_DIR}
+
 monitoring:
   # M11 §14: /metrics живёт на ОТДЕЛЬНОМ listener'е этого порта (не на
   # server.port) за IP-allowlist'ом; наружу порт не публикуется, внешний
