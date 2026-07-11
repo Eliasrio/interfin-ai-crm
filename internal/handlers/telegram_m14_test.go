@@ -79,6 +79,34 @@ func TestM14_SecondText_DoesNotRedetect(t *testing.T) {
 	}
 }
 
+// TestM14_StartCommand_NoLanguage — прод-баг первого деплоя M14: почти
+// каждый лид начинает с кнопки «Начать» (текст «/start»), детектор видел
+// в команде английский и навсегда записывал 'en'. Команды бота — не речь
+// лида: язык ждёт первого настоящего текста.
+func TestM14_StartCommand_NoLanguage(t *testing.T) {
+	e := newEnv(t)
+	e.post(updateJSON(777, 1, "/start"), testSecret)
+
+	if len(e.msgs.langSets) != 0 {
+		t.Fatalf("команда /start не должна выставлять язык: %v", e.msgs.langSets)
+	}
+	if e.leads.created[0].Language != nil {
+		t.Fatalf("язык лида после /start: %v, ожидали NULL", *e.leads.created[0].Language)
+	}
+	if evs := e.languageEvents(); len(evs) != 0 {
+		t.Fatalf("событий lead_language %d, ожидали 0", len(evs))
+	}
+	if len(e.msgs.inbound) != 1 {
+		t.Fatalf("сама команда обязана сохраниться как inbound: %d", len(e.msgs.inbound))
+	}
+
+	// Первый настоящий текст после /start — детекция штатно.
+	e.post(updateJSON(777, 2, "Привет, расскажите про услуги"), testSecret)
+	if len(e.msgs.langSets) != 1 || e.msgs.langSets[0] != "ru" {
+		t.Fatalf("после первого текста: %v, ожидали [ru]", e.msgs.langSets)
+	}
+}
+
 // TestM14_NonTextFirst_NoLanguage — критерий приёмки 3 (первая половина):
 // первое сообщение нетекстовое — язык не выставлен; первый ТЕКСТ после него
 // детектится штатно.

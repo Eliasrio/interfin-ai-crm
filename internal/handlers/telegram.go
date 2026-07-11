@@ -147,8 +147,11 @@ func (h *TelegramWebhook) SaveAndReturn200() gin.HandlerFunc {
 		// M14: первый ТЕКСТОВЫЙ inbound лида без языка — детекция и запись
 		// той же транзакцией, что и сообщение. Нетекстовое (content пуст)
 		// язык не выставляет; детекция локальная — правило «200 немедленно»
-		// (CLAUDE.md §4.4) не нарушается.
-		if lead.Language == nil && strings.TrimSpace(inbound.Content) != "" {
+		// (CLAUDE.md §4.4) не нарушается. Команды бота («/start» с кнопки
+		// «Начать» — первое сообщение почти каждого лида) — не речь лида:
+		// детектор увидел бы в них английский, язык ждёт настоящего текста.
+		text := strings.TrimSpace(inbound.Content)
+		if lead.Language == nil && text != "" && !strings.HasPrefix(text, "/") {
 			detected := lang.Detect(inbound.Content)
 			langSet, err := h.msgs.CreateInboundSetLanguage(ctx, inbound, detected)
 			if err != nil {
