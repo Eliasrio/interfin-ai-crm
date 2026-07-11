@@ -99,6 +99,8 @@ func run(log *slog.Logger) error {
 	lgpdRepo := repo.NewLGPD(gormDB)
 	// M13: настройки CRM (таблица 0014) с кэшем 30с — интервалы takeover.
 	settingsSvc := settings.New(repo.NewSettings(gormDB))
+	// EP-02: версии системного промпта Эммы (панель, вкладка 1, таблица 0016).
+	emmaPrompts := repo.NewEmmaPrompts(gormDB)
 
 	// --- Redis: одиночный (dev) или Sentinel (prod), по конфигу ---
 	var rdb redis.UniversalClient
@@ -228,7 +230,10 @@ func run(log *slog.Logger) error {
 			Pub:           pub,         // M12: событие message на каждый outbound Эммы
 			Settings:      settingsSvc, // M13: интервалы контура takeover
 			TakeoverEnq:   q,           // M13: напоминание при молчащей Эмме
-			Log:           log,
+			// EP-02: промпт из БД с кэшем 30 с — правка из панели доезжает
+			// до Эммы без рестарта (fallback на константу внутри провайдера).
+			Prompt: worker.NewPromptProvider(emmaPrompts, log),
+			Log:    log,
 		}),
 		summarizer,
 		sender,
@@ -379,6 +384,13 @@ func run(log *slog.Logger) error {
 		AnthropicKeySet:  cfg.Claude.APIKey != "",
 		Model:            cfg.Claude.Model,
 		WebhookURLSet:    cfg.Telegram.WebhookURL != "",
+	}).Register(emmaProtected)
+	// EP-02: промпт + история версий (вкладка 1). Лимит токенов редактора —
+	// settings emma_panel.prompt_token_limit (тот же сервис, что PIN).
+	emma.NewPrompt(emma.PromptDeps{
+		Prompts:  emmaPrompts,
+		Settings: settingsSvc,
+		Log:      log,
 	}).Register(emmaProtected)
 	log.Info("emma panel api registered", "model", cfg.Claude.Model)
 

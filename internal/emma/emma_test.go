@@ -158,6 +158,7 @@ type rig struct {
 	store    Store
 	settings *settings.Service
 	repo     *memSettingsRepo
+	prompts  *memPromptRepo // EP-02
 }
 
 func newRig(t *testing.T, store Store) *rig {
@@ -188,6 +189,10 @@ func newRig(t *testing.T, store Store) *rig {
 		Model:            "claude-sonnet-5",
 		WebhookURLSet:    false,
 	}).Register(protected)
+	// EP-02: промпт + история — на той же защищённой группе.
+	prompts := newMemPromptRepo()
+	NewPrompt(PromptDeps{Prompts: prompts, Settings: settingsSvc, Log: log}).
+		Register(protected)
 
 	return &rig{
 		router:   r,
@@ -195,6 +200,7 @@ func newRig(t *testing.T, store Store) *rig {
 		store:    store,
 		settings: settingsSvc,
 		repo:     memRepo,
+		prompts:  prompts,
 	}
 }
 
@@ -256,7 +262,8 @@ func setupPIN(t *testing.T, rg *rig, admin, pin string) {
 		gin.H{"pin": pin}), http.StatusOK, "")
 }
 
-// emmaPaths — все роуты EP-01 (гейт-тесты обязаны покрывать каждый).
+// emmaPaths — все роуты EP-01 + EP-02 (гейт-тесты обязаны покрывать каждый:
+// manager → 403, без токена → 401, admin без PIN-сессии → 401 PIN_REQUIRED).
 var emmaPaths = []struct{ method, path string }{
 	{http.MethodGet, "/api/emma/pin/status"},
 	{http.MethodPost, "/api/emma/pin/setup"},
@@ -264,6 +271,12 @@ var emmaPaths = []struct{ method, path string }{
 	{http.MethodPost, "/api/emma/pin/change"},
 	{http.MethodDelete, "/api/emma/pin/session"},
 	{http.MethodGet, "/api/emma/status"},
+	// EP-02 (критерий приёмки: все ручки prompt за общей цепочкой гейтов).
+	{http.MethodGet, "/api/emma/prompt"},
+	{http.MethodPut, "/api/emma/prompt"},
+	{http.MethodGet, "/api/emma/prompt/history"},
+	{http.MethodGet, "/api/emma/prompt/history/1"},
+	{http.MethodPost, "/api/emma/prompt/history/1/restore"},
 }
 
 // --- гейты: роль и PIN-сессия (критерий приёмки 2) ---

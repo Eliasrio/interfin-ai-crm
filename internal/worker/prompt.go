@@ -1,7 +1,9 @@
-// prompt.go — системный промпт бота (M3 — база, M4 — RAG-chunks).
+// prompt.go — сборка system-блока (M3 — база, M4 — RAG-chunks, EP-02 —
+// промпт из БД + секции запретных тем и стиля).
 //
-// Суммарно system-блок (база + RAG) обязан оставаться в пределах
-// budget.system_prompt = 2000 токенов (§7.2) — за этим следит
+// Суммарно system-блок (база + секции панели + RAG) обязан оставаться в
+// пределах budget.system_prompt = 5000 токенов (решение владельца
+// 2026-07-11, ТЗ панели §0; было 2000 по SRS §7.2) — за этим следит
 // Budgeter.Build (truncateToTokens).
 package worker
 
@@ -10,12 +12,19 @@ import (
 	"strings"
 
 	"github.com/interfin/interfin-ai-crm/internal/lang"
+	"github.com/interfin/interfin-ai-crm/internal/models"
 	"github.com/interfin/interfin-ai-crm/internal/repo"
 )
 
 // systemPrompt — базовая роль ассистента (бренд и правила — владельца
 // продукта, 2026-07-07; исходная INTERFIN-версия из SRS §2/§7 заменена).
 // Текст намеренно короткий: бюджет system-блока делится с RAG-контекстом.
+//
+// Deprecated: с EP-02 боевой промпт живёт в БД (emma_prompt_versions,
+// сид 0021 — копия этого текста) и редактируется из панели. Константа
+// осталась ТОЛЬКО как fallback PromptProvider на случай пустой таблицы /
+// недоступной БД. Править поведение Эммы здесь бессмысленно — на проде
+// текст берётся из БД.
 const systemPrompt = `Ты — Эмма, менеджер сервиса «Свои в Бразилии»
 (svoibrazil.ru, Рио-де-Жанейро). Представляйся по имени. Главная услуга —
 гражданство Бразилии через рождение ребёнка для всей семьи: сопровождение
@@ -49,6 +58,46 @@ const systemPrompt = `Ты — Эмма, менеджер сервиса «Св�
 - Никогда не проси пароли, коды подтверждения и платёжные данные.
 - Если клиент просит удалить его данные — объясни, что запрос передан
   менеджеру (право на удаление по LGPD).`
+
+// styleSections — стиль общения (вкладка 1) → короткая вставка system-блока.
+// neutral намеренно отсутствует: нейтральный стиль текста не добавляет (ТЗ §3).
+var styleSections = map[string]string{
+	models.EmmaStyleFormal: "Придерживайся формального, делового стиля общения: " +
+		"обращайся на «вы», без смайликов и фамильярности.",
+	models.EmmaStyleFriendly: "Общайся дружелюбно и тепло, простым разговорным языком; " +
+		"уместны эмодзи в меру.",
+	models.EmmaStyleExpert: "Отвечай как эксперт: уверенно, со ссылкой на факты и детали " +
+		"из базы знаний, но оставайся понятной неспециалисту.",
+}
+
+// forbiddenTopicsSection — секция запретных тем (ТЗ §3): проверка тем — только
+// через промпт, пост-фильтрация ответа исключена решением владельца.
+// Пустой список — секции нет.
+func forbiddenTopicsSection(topics []string) string {
+	if len(topics) == 0 {
+		return ""
+	}
+	return "Никогда не обсуждай следующие темы: " + strings.Join(topics, ", ") +
+		". Вежливо возвращай разговор к услугам сервиса."
+}
+
+// buildSystemBase — system-блок до RAG-хвоста, порядок секций фиксирован
+// ТЗ §3 «Сборка system-блока»: 1) промпт из БД (правила про счета менеджера
+// M12 — внутри текста, отдельной код-вставки нет — уточнение task EP-02);
+// 2) запретные темы; 3) стиль; 4) языковая инструкция M14 (код, не
+// редактируется). Секции 6–7 (контакты EP-05, файлы EP-04) добавляются
+// сюда же элементами sections; RAG-чанки приклеивает composeSystemPrompt.
+func buildSystemBase(cfg PromptConfig, language *string) string {
+	sections := []string{cfg.Text}
+	if s := forbiddenTopicsSection(cfg.ForbiddenTopics); s != "" {
+		sections = append(sections, s)
+	}
+	if s := styleSections[cfg.Style]; s != "" {
+		sections = append(sections, s)
+	}
+	sections = append(sections, languageInstruction(language))
+	return strings.Join(sections, "\n\n")
+}
 
 // languageNames — язык лида → название для языковой инструкции system-блока.
 var languageNames = map[string]string{

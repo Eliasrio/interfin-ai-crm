@@ -81,6 +81,11 @@ type ProcessorDeps struct {
 	Settings    settings.Reader
 	TakeoverEnq queue.TakeoverEnqueuer
 
+	// EP-02: источник системного промпта (панель Эммы, кэш 30 с).
+	// nil — фиксированная константа systemPrompt (юнит-тесты M3, поведение
+	// до EP-02); боевая сборка задаёт CachedPromptProvider.
+	Prompt PromptProvider
+
 	Log *slog.Logger
 }
 
@@ -210,11 +215,12 @@ func (p *Processor) HandleProcessInbound(ctx context.Context, t *asynq.Task) err
 		}
 	}
 
-	// 3) Контекст в пределах бюджета §7.2: system+RAG ≤ 2000, summary ≤ 1000.
-	// M14: к базовому промпту приклеивается языковая инструкция по языку
-	// лида (NULL → ru) — Эмма ведёт весь диалог на языке клиента.
+	// 3) Контекст в пределах бюджета: system+секции панели+RAG ≤ 5000
+	// (EP-02, было 2000 по SRS §7.2), summary ≤ 1000. База system-блока —
+	// из провайдера промпта (панель Эммы, кэш 30 с; nil/ошибка — константа),
+	// секции тем/стиля/языка добавляет buildSystemBase (порядок ТЗ §3).
 	summary := p.loadSummary(ctx, lead.ID, log)
-	base := systemPrompt + "\n\n" + languageInstruction(lead.Language)
+	base := buildSystemBase(p.promptConfig(ctx, log), lead.Language)
 	system, msgs, stats, err := d.Budgeter.Build(ctx, composeSystemPrompt(base, chunks), summary, history)
 	if err != nil {
 		return fmt.Errorf("worker: сборка контекста: %w", err)
@@ -260,6 +266,21 @@ func (p *Processor) HandleProcessInbound(ctx context.Context, t *asynq.Task) err
 		"reply_tokens_estimate", replyTokens,
 	)
 	return nil
+}
+
+// promptConfig — активная конфигурация промпта. Без провайдера (юнит-тесты
+// M3) и при его ошибке — fallback-константа: промпт не роняет диалог,
+// боевой CachedPromptProvider ошибок и так не возвращает (fallback внутри).
+func (p *Processor) promptConfig(ctx context.Context, log *slog.Logger) PromptConfig {
+	if p.deps.Prompt == nil {
+		return fallbackPromptConfig()
+	}
+	cfg, err := p.deps.Prompt.Current(ctx)
+	if err != nil {
+		log.Warn("worker: промпт из провайдера не получен, работаем на константе", "error", err)
+		return fallbackPromptConfig()
+	}
+	return cfg
 }
 
 // dropIfSilenced — вторая проверка режима (M13, BUG-01): перечитывает лида

@@ -46,11 +46,18 @@ claude:
   model: claude-sonnet-5
   claude_reply_tokens: 1000
   token_budget:
-    system_prompt: 2000
+    # 2000 → 5000: решение владельца 2026-07-11 (ТЗ панели Эммы §0/§10 п.6).
+    # System-блок делят промпт панели (≤1200) + контакты EP-05 (~600) +
+    # файлы EP-04 (~300) + RAG-чанки (~1500) — в 2000 арифметика не
+    # сходилась, база знаний вытеснялась. Итог входа: 11000 токенов
+    # (отклонение от SRS §7.2 зафиксировано в CLAUDE.md §4.6).
+    system_prompt: 5000
     summary: 1000
     history: 4000
-    safety_buffer: 1000        # ИТОГО 9000
-  count_tokens_threshold: 7500 # AQ²-fix #7
+    safety_buffer: 1000        # ИТОГО вход 11000 (+ ответ 1000 = 12000)
+  count_tokens_threshold: 7500 # AQ²-fix #7; теперь МЕНЬШЕ возможного
+                               # system-блока — точный count_tokens зовётся
+                               # чаще, это ожидаемо (task EP-02 §5)
 
 embeddings:                    # AQ²-fix #2: Voyage вместо OpenAI
   provider: voyage

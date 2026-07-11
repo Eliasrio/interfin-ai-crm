@@ -4,6 +4,10 @@
 // Решение M12 §7: prompt.go НЕ меняется — outbound менеджера попадает в
 // историю через ListByLead и уходит в messages-блок ролью assistant, как
 // ответы Эммы («считает слова менеджера своими» и не противоречит им).
+//
+// EP-02: база system-блока приходит из PromptProvider (правила про счета
+// менеджера — ВНУТРИ текста промпта, отдельной код-вставки нет — уезжают
+// в БД вместе с текстом); тест собирает базу тем же путём, что processor.
 package worker
 
 import (
@@ -31,9 +35,16 @@ func TestPromptBuild_ManagerOutboundInMessages(t *testing.T) {
 	}
 
 	b := newBudgeter(t, &fakeCounter{forbid: true, t: t})
-	_, msgs, _, err := b.Build(context.Background(), systemPrompt, "", history)
+	// База — через провайдерный путь EP-02 (fallback = константа = сид 0021):
+	// правила про счета менеджера обязаны ехать вместе с текстом промпта.
+	base := buildSystemBase(fallbackPromptConfig(), nil)
+	system, msgs, _, err := b.Build(context.Background(), base, "", history)
 	if err != nil {
 		t.Fatalf("build: %v", err)
+	}
+	if !strings.Contains(system, "счета на оплату") {
+		t.Fatal("правило M12 про счета менеджера потерялось из system-блока " +
+			"(текст промпта из провайдера)")
 	}
 
 	found := false

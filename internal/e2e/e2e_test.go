@@ -184,13 +184,13 @@ func TestE2E_LeadWritesAndGetsClaudeReply(t *testing.T) {
 		t.Fatalf("telebot: %v", err)
 	}
 
-	// --- Claude: ЖИВОЙ API, боевой конфиг §7.2 ---
+	// --- Claude: ЖИВОЙ API, боевой конфиг §7.2 (system 5000 — EP-02) ---
 	claudeCfg := config.ClaudeConfig{
 		APIKey:            apiKey,
 		Model:             "claude-sonnet-5",
 		ClaudeReplyTokens: 1000,
 		TokenBudget: config.TokenBudget{
-			SystemPrompt: 2000, Summary: 1000, History: 4000, SafetyBuffer: 1000,
+			SystemPrompt: 5000, Summary: 1000, History: 4000, SafetyBuffer: 1000,
 		},
 		CountTokensThreshold: 7500,
 	}
@@ -223,7 +223,10 @@ func TestE2E_LeadWritesAndGetsClaudeReply(t *testing.T) {
 			Summaries:     summaries,
 			SummaryEnq:    q,
 			SummaryEveryN: 15,
-			Log:           log,
+			// EP-02: промпт из БД, как в боевой сборке cmd/server (сид 0021
+			// уже в схеме; пустая таблица легально падает на константу).
+			Prompt: worker.NewPromptProvider(repo.NewEmmaPrompts(gormDB), log),
+			Log:    log,
 		}),
 		worker.NewSummarizer(leads, msgs, summaries, ai, worker.NewRedisLocker(rdb), log),
 		sender, 0, log)

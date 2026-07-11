@@ -128,6 +128,37 @@ type SettingsRepo interface {
 	Set(ctx context.Context, key, value string) error
 }
 
+// EmmaPromptRepo — emma_prompt_versions (EP-02, ТЗ панели §3/§5).
+// Версии промпта не мутируются: любое изменение (в т.ч. restore) — новая
+// строка через CreateVersion, старая активная остаётся в истории сама.
+type EmmaPromptRepo interface {
+	// GetCurrent — активная версия (is_current). ErrNotFound — таблица пуста
+	// (свежая БД без сида 0021): вызывающий падает на fallback-константу.
+	GetCurrent(ctx context.Context) (*models.EmmaPromptVersion, error)
+	// CreateVersion одной транзакцией снимает is_current со старой активной
+	// и вставляет v активной (v.IsCurrent выставляется здесь). Гонку двух
+	// конкурентных вызовов решает частичный уникальный индекс 0016: проигравший
+	// получает ошибку транзакции, а не молчаливую перезапись — вторая активная
+	// невозможна. Заполняет v.ID/v.CreatedAt.
+	CreateVersion(ctx context.Context, v *models.EmmaPromptVersion) error
+	// History — страница истории (новые → старые) и total для пагинации.
+	// Превью — первые 100 СИМВОЛОВ промпта (LEFT() Postgres режет по рунам,
+	// не байтам — кириллица не рвётся). page с 1, perPage > 0.
+	History(ctx context.Context, page, perPage int) ([]EmmaPromptHistoryItem, int64, error)
+	// GetByID — полная версия для просмотра/restore. ErrNotFound — нет id.
+	GetByID(ctx context.Context, id int64) (*models.EmmaPromptVersion, error)
+}
+
+// EmmaPromptHistoryItem — строка боковой панели истории (ТЗ §3): полная
+// версия не поднимается, промпт обрезан до превью ещё в SQL.
+type EmmaPromptHistoryItem struct {
+	ID        int64     `gorm:"column:id"`
+	CreatedAt time.Time `gorm:"column:created_at"`
+	CreatedBy *int64    `gorm:"column:created_by"` // NULL — сид миграции/удалённый менеджер
+	Preview   string    `gorm:"column:preview"`    // первые 100 рун системного промпта
+	Style     string    `gorm:"column:style"`
+}
+
 // PaymentRepo — payment_events (§8.3).
 type PaymentRepo interface {
 	// Create вставляет событие платёжного gateway. Идемпотентен по

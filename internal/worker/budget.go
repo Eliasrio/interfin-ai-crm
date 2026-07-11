@@ -1,8 +1,10 @@
 // budget.go — токен-бюджетер контекста Claude (SRS §7.2, CLAUDE.md §4.6).
 //
-// Бюджет (config claude.token_budget): system 2000 + summary 1000 +
-// history 4000 + buffer 1000 = 8000 входных токенов; ответ модели
-// (claude_reply_tokens 1000) доводит потолок запроса до 9000 (IQ-6).
+// Бюджет (config claude.token_budget): system 5000 (было 2000 по SRS §7.2 —
+// поднят решением владельца 2026-07-11 под секции панели Эммы + RAG,
+// ТЗ панели §0; отклонение зафиксировано в CLAUDE.md §4.6) + summary 1000 +
+// history 4000 + buffer 1000 = 11000 входных токенов; ответ модели
+// (claude_reply_tokens 1000) доводит потолок запроса до 12000.
 //
 // Гибридный подсчёт (AQ²-fix #7): всегда локальная оценка len/4; точный
 // count_tokens — ТОЛЬКО когда оценка превысила count_tokens_threshold (7500).
@@ -25,6 +27,11 @@ const charsPerToken = 4
 
 // estimateTokens — локальная оценка без round-trip к Anthropic.
 func estimateTokens(text string) int { return len(text) / charsPerToken }
+
+// EstimateTokens — публичная обёртка той же метрики len(bytes)/4: единая
+// правда для Budgeter и валидации лимита промпта в API панели (EP-02,
+// ТЗ §3 — UI-счётчик обязан совпадать с воркером). Формулу не дублировать.
+func EstimateTokens(text string) int { return estimateTokens(text) }
 
 // Counter — точный подсчёт токенов (в проде *claude.Client, в тестах фейк,
 // который заодно считает число вызовов — критерий AQ²-7).

@@ -335,9 +335,12 @@ func (c *Config) validate() error {
 			problems = append(problems, "claude.claude_reply_tokens должен быть > 0 (§7.2)")
 		case b.SystemPrompt <= 0 || b.History <= 0 || b.Summary < 0 || b.SafetyBuffer < 0:
 			problems = append(problems, "claude.token_budget: компоненты бюджета невалидны (§7.2)")
-		case b.SystemPrompt+b.Summary+b.History+b.SafetyBuffer+cl.ClaudeReplyTokens > 9000:
-			// IQ-6: запрос к Claude никогда не превышает 9000 токенов.
-			problems = append(problems, "claude: бюджет + claude_reply_tokens превышают 9000 (IQ-6)")
+		case b.SystemPrompt+b.Summary+b.History+b.SafetyBuffer+cl.ClaudeReplyTokens > 12000:
+			// IQ-6 задавал потолок 9000; с бюджетом system-блока 5000
+			// (решение владельца 2026-07-11, ТЗ панели §0/§10.6 — секции
+			// панели + RAG) потолок: вход 11000 + ответ 1000 = 12000.
+			// Отклонение от SRS §7.2 зафиксировано в CLAUDE.md §4.6.
+			problems = append(problems, "claude: бюджет + claude_reply_tokens превышают 12000 (IQ-6 + EP-02)")
 		case cl.CountTokensThreshold <= 0:
 			problems = append(problems, "claude.count_tokens_threshold должен быть > 0 (AQ²-fix #7)")
 		}
