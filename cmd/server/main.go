@@ -113,6 +113,8 @@ func run(log *slog.Logger) error {
 	// и журнал событий Эммы (таблица 0020).
 	emmaSendFiles := repo.NewEmmaSendFiles(gormDB)
 	emmaEvents := repo.NewEmmaEvents(gormDB)
+	// EP-05: справочник контактов (вкладка 4, таблица 0019).
+	emmaContacts := repo.NewEmmaContacts(gormDB)
 
 	// --- Redis: одиночный (dev) или Sentinel (prod), по конфигу ---
 	var rdb redis.UniversalClient
@@ -250,7 +252,12 @@ func run(log *slog.Logger) error {
 			FilesProv: worker.NewSendFilesProvider(emmaSendFiles, log),
 			SendFiles: emmaSendFiles,
 			Events:    emmaEvents,
-			Log:       log,
+			// EP-05: секция контактов (кэш 30 с), ключи вкладки 5 (welcome/
+			// кнопка/handoff) и чат менеджеров для уведомления о handoff.
+			Contacts:      worker.NewContactsProvider(emmaContacts, log),
+			Panel:         settingsSvc,
+			ManagerChatID: cfg.Telegram.ManagerChatID,
+			Log:           log,
 		}),
 		summarizer,
 		sender,
@@ -428,6 +435,15 @@ func run(log *slog.Logger) error {
 	}).Register(emmaProtected)
 	// EP-04: файлы для отправки (вкладка 3) — CRUD библиотеки; отправку
 	// по маркерам исполняет asynq-воркер выше.
+	// EP-05: контакты (вкладка 4) и сценарий (вкладка 5).
+	emma.NewContacts(emma.ContactsDeps{
+		Contacts: emmaContacts,
+		Log:      log,
+	}).Register(emmaProtected)
+	emma.NewScenario(emma.ScenarioDeps{
+		Settings: settingsSvc,
+		Log:      log,
+	}).Register(emmaProtected)
 	emma.NewFiles(emma.FilesDeps{
 		Files: emmaSendFiles,
 		Dir:   cfg.Emma.FilesDir(),

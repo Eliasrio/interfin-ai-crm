@@ -216,6 +216,39 @@ type EmmaSendFileUpdate struct {
 	IsActive    *bool
 }
 
+// EmmaContactsRepo — emma_contacts (EP-05, ТЗ панели §3 вкладка 4):
+// справочник контактов и ссылок для секции system-блока.
+type EmmaContactsRepo interface {
+	// List — все контакты: sort_order ASC, новые (id ASC) — в конец.
+	List(ctx context.Context) ([]models.EmmaContact, error)
+	// GetByID — контакт по id. ErrNotFound, если нет.
+	GetByID(ctx context.Context, id int64) (*models.EmmaContact, error)
+	// Create вставляет контакт; заполняет c.ID. IsActive задаёт вызывающий
+	// явно (грабля M5). При 30 уже активных и c.IsActive — ErrContactsLimit
+	// (проверка в транзакции, гонка не даёт 31-го).
+	Create(ctx context.Context, c *models.EmmaContact) error
+	// Update точечно меняет поля (nil — не трогается; Comment "" → NULL);
+	// возвращает обновлённую строку. PATCH, включающий is_active, при 30
+	// активных — ErrContactsLimit. ErrNotFound — нет id.
+	Update(ctx context.Context, id int64, upd EmmaContactUpdate) (*models.EmmaContact, error)
+	// Delete удаляет строку. ErrNotFound — нет id.
+	Delete(ctx context.Context, id int64) error
+	// ListActive — только is_active, sort_order ASC (порядок секции
+	// промпта). Источник секции контактов system-блока.
+	ListActive(ctx context.Context) ([]models.EmmaContact, error)
+}
+
+// EmmaContactUpdate — частичное обновление контакта (PATCH ТЗ §6):
+// nil-поле не меняется.
+type EmmaContactUpdate struct {
+	Type      *string
+	Name      *string
+	Value     *string
+	Comment   *string // "" — сбросить в NULL
+	IsActive  *bool
+	SortOrder *int
+}
+
 // EmmaEventsRepo — emma_events (EP-04 пишет file_sent/error, EP-06 читает
 // для статистики). Запись — best effort вызывающего: журнал не роняет диалог.
 type EmmaEventsRepo interface {

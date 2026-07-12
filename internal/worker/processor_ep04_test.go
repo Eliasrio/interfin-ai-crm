@@ -126,14 +126,17 @@ var (
 )
 
 // newEP04Processor — процессор с библиотекой файлов и журналом событий.
+// Лид — СВЕЖАЯ копия testLead: handoff-ветка (EP-05) мутирует режим, общий
+// указатель отравил бы остальные тесты пакета.
 func newEP04Processor(t *testing.T, files *fakeSendFiles, ai *fakeAI, snd *fakeSender) (*Processor, *fakeMsgs, *fakeEvents) {
 	t.Helper()
 	msgs := &fakeMsgs{history: []models.Message{
 		{LeadID: 7, Direction: models.DirectionInbound, Content: "Сколько стоит?"},
 	}}
 	events := &fakeEvents{}
+	lead := *testLead
 	p := NewProcessor(ProcessorDeps{
-		Leads:     newFakeLeads(testLead),
+		Leads:     newFakeLeads(&lead),
 		Msgs:      msgs,
 		Budgeter:  mustBudgeter(t),
 		AI:        ai,
@@ -270,8 +273,9 @@ func TestEP04_InactiveAndMissingFile(t *testing.T) {
 	}
 }
 
-// Критерий приёмки: {{handoff}} вырезан, поведение не меняется (обработка —
-// EP-05); файл при этом отправляется как обычно.
+// {{handoff}} вырезан, текст ушёл чистым одним сообщением; с EP-05 маркер
+// уже ОБРАБАТЫВАЕТСЯ (режим human, событие handoff) — контракт EP-04
+// «только вырезать» заменён по task EP-05 §7.
 func TestEP04_HandoffOnlyStripped(t *testing.T) {
 	files := newFakeSendFiles(pricePDF)
 	ai := &fakeAI{reply: "Позову менеджера. {{handoff}}"}
@@ -285,11 +289,15 @@ func TestEP04_HandoffOnlyStripped(t *testing.T) {
 		t.Errorf("Send: %+v", snd.sent)
 	}
 	if len(msgs.created) != 1 || msgs.created[0].Content != "Позову менеджера." {
-		t.Errorf("messages: %+v", msgs.created)
+		t.Errorf("messages: %+v (confirm-текст не должен дублироваться)", msgs.created)
 	}
-	// Никаких событий и файлов: EP-04 handoff только логирует.
-	if len(events.events) != 0 {
-		t.Errorf("события: %+v", events.events)
+	// EP-05: маркер переводит диалог менеджеру — событие handoff записано.
+	if got := events.byType(models.EmmaEventHandoff); len(got) != 1 {
+		t.Errorf("emma_events handoff: %+v", got)
+	}
+	lead, err := p.deps.Leads.GetByID(context.Background(), 7)
+	if err != nil || lead.DialogMode != models.DialogModeHuman {
+		t.Errorf("dialog_mode = %q (%v), ждали human", lead.DialogMode, err)
 	}
 	if len(snd.docs)+len(snd.photos) != 0 {
 		t.Errorf("файлы: docs %+v photos %+v", snd.docs, snd.photos)

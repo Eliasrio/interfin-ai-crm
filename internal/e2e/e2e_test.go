@@ -50,10 +50,13 @@ const (
 	leadTgID = int64(880001)
 )
 
-// sentMessage — что «Telegram» получил в sendMessage.
+// sentMessage — что «Telegram» получил в sendMessage. ReplyMarkup — сырой
+// JSON поля reply_markup ("" — не передавалось): EP-05 проверяет
+// клавиатуру кнопки менеджера.
 type sentMessage struct {
-	ChatID string
-	Text   string
+	ChatID      string
+	Text        string
+	ReplyMarkup string
 }
 
 // sentTgFile — доставка sendDocument/sendPhoto (EP-04): telebot шлёт файлы
@@ -93,9 +96,14 @@ func (m *telegramMock) handler(t *testing.T) http.HandlerFunc {
 			fmt.Fprint(w, `{"ok":true,"result":true}`)
 		case strings.HasSuffix(r.URL.Path, "/sendMessage"):
 			payload := decodeJSON(r)
+			markup := ""
+			if raw, ok := payload["reply_markup"]; ok {
+				markup = fmt.Sprint(raw)
+			}
 			m.sent = append(m.sent, sentMessage{
-				ChatID: fmt.Sprint(payload["chat_id"]),
-				Text:   fmt.Sprint(payload["text"]),
+				ChatID:      fmt.Sprint(payload["chat_id"]),
+				Text:        fmt.Sprint(payload["text"]),
+				ReplyMarkup: markup,
 			})
 			fmt.Fprint(w, `{"ok":true,"result":{"message_id":1,"date":1,"chat":{"id":880001,"type":"private"}}}`)
 		case strings.HasSuffix(r.URL.Path, "/sendDocument"), strings.HasSuffix(r.URL.Path, "/sendPhoto"):

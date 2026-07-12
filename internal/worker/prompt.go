@@ -104,6 +104,50 @@ func buildSystemBase(cfg PromptConfig, language *string, extras ...string) strin
 	return strings.Join(sections, "\n\n")
 }
 
+// contactTypeLabels — тип контакта → русская подпись в секции промпта
+// (значения — CHECK миграции 0019).
+var contactTypeLabels = map[string]string{
+	"phone":    "телефон",
+	"whatsapp": "WhatsApp",
+	"telegram": "Telegram",
+	"email":    "email",
+	"website":  "сайт",
+	"other":    "контакт",
+}
+
+// contactsSection — секция справочника контактов (EP-05, ТЗ §3 вкладка 4):
+// только активные, по sort_order, в формате
+// «— Менеджер Анна (телефон +7 999…): давай, когда клиент готов…».
+// Пустой список — секции нет (и правило «не давай контактов не из списка»
+// остаётся на промпте из БД).
+func contactsSection(contacts []models.EmmaContact) string {
+	if len(contacts) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("Контакты и ссылки (упоминай ТОЛЬКО из этого списка, к месту):")
+	for _, c := range contacts {
+		label := contactTypeLabels[c.Type]
+		if label == "" {
+			label = "контакт" // неизвестный тип легально не пройдёт CHECK, страховка
+		}
+		fmt.Fprintf(&b, "\n— %s (%s %s)", c.Name, label, c.Value)
+		if c.Comment != nil && *c.Comment != "" {
+			fmt.Fprintf(&b, ": %s", *c.Comment)
+		}
+	}
+	return b.String()
+}
+
+// handoffInstruction — инструкция маркера {{handoff}} (EP-05, ТЗ §4 п.1):
+// распознавание просьбы о живом человеке — на Эмме, жёсткого списка фраз
+// нет (решение владельца, ТЗ §10 п.1). Код-секция рядом с инструкцией
+// файлов; добавляется всегда — кнопка может быть выключена, а просьба
+// словами остаётся.
+const handoffInstruction = "Если клиент просит живого человека или менеджера — " +
+	"добавь В КОНЕЦ ответа маркер {{handoff}} и сообщи клиенту, что зовёшь менеджера. " +
+	"Не упоминай сам маркер в тексте ответа."
+
 // sendFilesSection — секция библиотеки файлов (EP-04, ТЗ §3 вкладка 3):
 // перечень активных файлов с подсказками-описаниями и инструкция
 // маркер-протокола. Пустой список — секции нет (и Эмма про файлы не знает).

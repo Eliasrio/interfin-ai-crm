@@ -164,6 +164,7 @@ type rig struct {
 	kbDir     string            // EP-03: t.TempDir()
 	sendFiles *memSendFilesRepo // EP-04
 	filesDir  string            // EP-04: t.TempDir()
+	contacts  *memContactsRepo  // EP-05
 }
 
 func newRig(t *testing.T, store Store) *rig {
@@ -209,6 +210,12 @@ func newRig(t *testing.T, store Store) *rig {
 	filesDir := t.TempDir()
 	NewFiles(FilesDeps{Files: sendFiles, Dir: filesDir, Log: log}).
 		Register(protected)
+	// EP-05: контакты и сценарий — на той же защищённой группе.
+	contacts := newMemContactsRepo()
+	NewContacts(ContactsDeps{Contacts: contacts, Log: log}).
+		Register(protected)
+	NewScenario(ScenarioDeps{Settings: settingsSvc, Log: log}).
+		Register(protected)
 
 	return &rig{
 		router:    r,
@@ -222,6 +229,7 @@ func newRig(t *testing.T, store Store) *rig {
 		kbDir:     kbDir,
 		sendFiles: sendFiles,
 		filesDir:  filesDir,
+		contacts:  contacts,
 	}
 }
 
@@ -310,6 +318,14 @@ var emmaPaths = []struct{ method, path string }{
 	{http.MethodPost, "/api/emma/files"},
 	{http.MethodPatch, "/api/emma/files/1"},
 	{http.MethodDelete, "/api/emma/files/1"},
+	// EP-05 (критерий приёмки: manager → 403, admin без PIN → 401 на
+	// contacts и scenario).
+	{http.MethodGet, "/api/emma/contacts"},
+	{http.MethodPost, "/api/emma/contacts"},
+	{http.MethodPatch, "/api/emma/contacts/1"},
+	{http.MethodDelete, "/api/emma/contacts/1"},
+	{http.MethodGet, "/api/emma/scenario"},
+	{http.MethodPatch, "/api/emma/scenario"},
 }
 
 // --- гейты: роль и PIN-сессия (критерий приёмки 2) ---

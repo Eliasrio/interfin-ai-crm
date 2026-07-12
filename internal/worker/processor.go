@@ -46,6 +46,12 @@ type Sender interface {
 	SendDocument(chatID int64, path, fileName string) error
 	// SendPhoto отправляет изображение фотографией (EP-04: JPG/PNG).
 	SendPhoto(chatID int64, path string) error
+	// SendWithKeyboard — текст с постоянной reply-клавиатурой из одной
+	// кнопки buttonText (EP-05: «Связаться с менеджером»).
+	SendWithKeyboard(chatID int64, text, buttonText string) error
+	// SendRemoveKeyboard — текст со снятием reply-клавиатуры (EP-05:
+	// кнопку выключили в панели).
+	SendRemoveKeyboard(chatID int64, text string) error
 }
 
 // Completer — вызов Claude (в проде *claude.Client, в тестах фейк).
@@ -102,7 +108,25 @@ type ProcessorDeps struct {
 	SendFiles repo.EmmaSendFilesRepo
 	Events    repo.EmmaEventsRepo
 
+	// EP-05 (контакты + сценарий). Contacts — активные контакты для секции
+	// system-блока (кэш 30 с); Panel — строковые ключи вкладки 5 (welcome,
+	// кнопка менеджера, подтверждение handoff). Оба nil — режим юнит-тестов
+	// M3: секции контактов нет, ранний выход панели выключен, ответы уходят
+	// старым Send без клавиатуры (поведение до EP-05). ManagerChatID — чат
+	// менеджеров для уведомления о client-handoff (канал M13, уточнение ТЗ
+	// §4 п.4 — НЕ emma_panel.alert_chat_id); 0 = уведомления только в лог.
+	Contacts      ContactsProvider
+	Panel         PanelSettings
+	ManagerChatID int64
+
 	Log *slog.Logger
+}
+
+// PanelSettings — строковые ключи панели Эммы (в проде settings.Service,
+// кэш 30 с; в тестах — фейк). Отдельный от settings.Reader контракт:
+// Minutes сюда не тянем, фейки M13 не задеваются.
+type PanelSettings interface {
+	String(ctx context.Context, key string) string
 }
 
 // Processor — обработчик process:inbound.
@@ -181,7 +205,7 @@ func (p *Processor) HandleProcessInbound(ctx context.Context, t *asynq.Task) err
 	// Переотправляем сохранённое, к Claude не ходим.
 	if last := history[len(history)-1]; last.Direction == models.DirectionOutbound {
 		log.Info("worker: ответ уже сохранён, переотправка без вызова Claude")
-		if err := d.Sender.Send(lead.TelegramUserID, last.Content); err != nil {
+		if err := p.sendReply(ctx, lead.TelegramUserID, last.Content); err != nil {
 			return fmt.Errorf("worker: переотправка ответа: %w", err)
 		}
 		return nil
@@ -209,11 +233,19 @@ func (p *Processor) HandleProcessInbound(ctx context.Context, t *asynq.Task) err
 			return fmt.Errorf("worker: сохранение подсказки о нетекстовом: %w", err)
 		}
 		p.publishMessage(ctx, out, lead.StageID, log)
-		if err := d.Sender.Send(lead.TelegramUserID, reply); err != nil {
+		if err := p.sendReply(ctx, lead.TelegramUserID, reply); err != nil {
 			return fmt.Errorf("worker: отправка подсказки о нетекстовом: %w", err)
 		}
 		log.Info("worker: нетекстовое входящее — отправлена подсказка, Claude не вызывался")
 		return nil
+	}
+
+	// РАННИЙ ВЫХОД ПАНЕЛИ (EP-05, шаг 3 сводной схемы ТЗ) — строго ПОСЛЕ
+	// Kanban.OnInbound и проверки режима M13 (QA-фикс: ветка до очереди
+	// обошла бы анти-спам и сброс TTL): /start с непустым welcome отвечает
+	// без Claude; нажатие кнопки менеджера уводит в handoff.
+	if handled, err := p.panelEarlyExit(ctx, lead, &history[len(history)-1], payload.MsgID, log); handled || err != nil {
+		return err
 	}
 
 	// 1) Typing — best effort: недоставленный индикатор не стоит ретрая.
@@ -237,7 +269,9 @@ func (p *Processor) HandleProcessInbound(ctx context.Context, t *asynq.Task) err
 	// секции тем/стиля/языка добавляет buildSystemBase (порядок ТЗ §3).
 	summary := p.loadSummary(ctx, lead.ID, log)
 	base := buildSystemBase(p.promptConfig(ctx, log), lead.Language,
-		p.filesSection(ctx, log)) // EP-04: секция 7 (файлы); секция 6 (контакты) — EP-05
+		p.contactsSection(ctx, log), // EP-05: секция 6 (контакты) — после стиля/языка, перед файлами (ТЗ §3)
+		p.filesSection(ctx, log),    // EP-04: секция 7 (файлы)
+		handoffInstruction)          // EP-05: маркер {{handoff}} — распознавание просьбы о менеджере
 	system, msgs, stats, err := d.Budgeter.Build(ctx, composeSystemPrompt(base, chunks), summary, history)
 	if err != nil {
 		return fmt.Errorf("worker: сборка контекста: %w", err)
@@ -257,10 +291,6 @@ func (p *Processor) HandleProcessInbound(ctx context.Context, t *asynq.Task) err
 	clean, fileIDs, handoff, unknown := ParseMarkers(reply)
 	if len(unknown) > 0 {
 		log.Warn("worker: нераспознанные маркеры вырезаны из ответа", "markers", unknown)
-	}
-	if handoff {
-		// EP-04 только вырезает и логирует: перевод режима — EP-05.
-		log.Info("worker: handoff-маркер получен, обработка — EP-05")
 	}
 
 	// M13, BUG-01 (проверка №2): менеджер мог забрать диалог за время
@@ -287,7 +317,7 @@ func (p *Processor) HandleProcessInbound(ctx context.Context, t *asynq.Task) err
 		p.publishMessage(ctx, out, lead.StageID, log)
 
 		// Send. При падении ретрай уйдёт в ветку переотправки выше.
-		if err := d.Sender.Send(lead.TelegramUserID, clean); err != nil {
+		if err := p.sendReply(ctx, lead.TelegramUserID, clean); err != nil {
 			return fmt.Errorf("worker: отправка ответа: %w", err)
 		}
 	} else {
@@ -300,6 +330,16 @@ func (p *Processor) HandleProcessInbound(ctx context.Context, t *asynq.Task) err
 	// ретрай продублировал бы ответ клиенту.
 	p.sendMarkedFiles(ctx, lead, fileIDs, log)
 
+	// 8) {{handoff}} от Claude (EP-05, ТЗ §4 п.2) — тоже ПОСЛЕ успешного
+	// Send: собственный ответ Эммы уже ушёл чистым, confirm-текст вторым
+	// сообщением НЕ шлётся. Ошибки не роняют задачу (симметрично файлам):
+	// ретрай продублировал бы текст клиенту веткой переотправки.
+	if handoff {
+		if err := p.clientHandoff(ctx, lead, &history[len(history)-1], payload.MsgID, "", log); err != nil {
+			log.Error("worker: handoff по маркеру не выполнен", "error", err)
+		}
+	}
+
 	replyTokens := estimateTokens(clean)
 	log.Info("worker: ответ отправлен",
 		"rag_chunks", len(chunks),
@@ -311,6 +351,238 @@ func (p *Processor) HandleProcessInbound(ctx context.Context, t *asynq.Task) err
 		"reply_tokens_estimate", replyTokens,
 	)
 	return nil
+}
+
+// panelScenario — снимок ключей вкладки 5 (EP-05) на один шаг обработки.
+// Тексты тримятся здесь один раз; кнопка с пустым текстом считается
+// выключенной (API такое не сохранит — страховка от ручной правки БД).
+type panelScenario struct {
+	welcome       string
+	buttonEnabled bool
+	buttonText    string
+	confirmText   string
+}
+
+// scenario — чтение ключей вкладки 5 из settings (кэш 30 с — правка панели
+// доезжает без рестарта). Panel nil — нулевой сценарий: welcome пуст,
+// кнопка выключена (поведение до EP-05).
+func (p *Processor) scenario(ctx context.Context) panelScenario {
+	if p.deps.Panel == nil {
+		return panelScenario{}
+	}
+	sc := panelScenario{
+		welcome:       strings.TrimSpace(p.deps.Panel.String(ctx, settings.KeyWelcomeText)),
+		buttonEnabled: p.deps.Panel.String(ctx, settings.KeyManagerButtonEnabled) == "true",
+		buttonText:    strings.TrimSpace(p.deps.Panel.String(ctx, settings.KeyManagerButtonText)),
+		confirmText:   strings.TrimSpace(p.deps.Panel.String(ctx, settings.KeyHandoffConfirmText)),
+	}
+	if sc.buttonText == "" {
+		sc.buttonEnabled = false
+	}
+	return sc
+}
+
+// sendReply — отправка текста лиду с ветвлением клавиатуры (EP-05, ТЗ §3
+// вкладка 5): кнопка включена → КАЖДЫЙ ответ Эммы уходит с клавиатурой;
+// выключена → с RemoveKeyboard (иначе кнопка осталась бы у клиента
+// навсегда; состояние «надо снять» — по settings, без новых полей в БД,
+// для чата без клавиатуры это no-op Telegram). Panel nil (юнит-тесты M3,
+// e2e старого контура) — старый Send без клавиатуры.
+func (p *Processor) sendReply(ctx context.Context, chatID int64, text string) error {
+	if p.deps.Panel == nil {
+		return p.deps.Sender.Send(chatID, text)
+	}
+	if sc := p.scenario(ctx); sc.buttonEnabled {
+		return p.deps.Sender.SendWithKeyboard(chatID, text, sc.buttonText)
+	}
+	return p.deps.Sender.SendRemoveKeyboard(chatID, text)
+}
+
+// panelEarlyExit — шаг 3 сводной схемы ТЗ (EP-05): ранний выход панели,
+// СТРОГО после Kanban.OnInbound и проверки режима M13. handled=true —
+// inbound обслужен без Claude (welcome либо handoff), задача завершена.
+//
+// Ретраи: welcome сохраняется до Send — упавший Send ретраится веткой
+// переотправки (последний в истории outbound); ветка кнопки идемпотентна
+// через ранний выход по режиму (после handoff лид уже human — повтор гаснет
+// на шаге 2, дубля уведомления нет).
+func (p *Processor) panelEarlyExit(ctx context.Context, lead *models.Lead, inbound *models.Message, tgMsgID int, log *slog.Logger) (bool, error) {
+	if p.deps.Panel == nil {
+		return false, nil
+	}
+	sc := p.scenario(ctx)
+	text := strings.TrimSpace(inbound.Content)
+
+	// /start с непустым welcome → приветствие панели вместо Claude
+	// (пустое welcome = поведение как до эпика, отвечает Эмма-LLM).
+	if strings.HasPrefix(text, "/start") && sc.welcome != "" {
+		tokens := estimateTokens(sc.welcome)
+		author := models.AuthorBot
+		out := &models.Message{LeadID: lead.ID, Author: &author, Content: sc.welcome, Tokens: &tokens}
+		if err := p.deps.Msgs.CreateOutbound(ctx, out); err != nil {
+			return true, fmt.Errorf("worker: сохранение welcome: %w", err)
+		}
+		p.publishMessage(ctx, out, lead.StageID, log)
+		// Клавиатура — сразу с приветствия (решение владельца, ТЗ §10 п.2).
+		if err := p.sendReply(ctx, lead.TelegramUserID, sc.welcome); err != nil {
+			return true, fmt.Errorf("worker: отправка welcome: %w", err)
+		}
+		log.Info("worker: /start — отправлено приветствие панели, Claude не вызывался")
+		return true, nil
+	}
+
+	// Нажатие кнопки менеджера — точное совпадение текста (TrimSpace).
+	// Смена текста кнопки в панели старые клавиатуры не обновляет: старый
+	// текст придёт сюда как обычный текст и уйдёт в Эмму — она распознает
+	// просьбу маркером (мягкая деградация, ТЗ §3).
+	if sc.buttonEnabled && text == sc.buttonText {
+		return true, p.clientHandoff(ctx, lead, inbound, tgMsgID, sc.confirmText, log)
+	}
+	return false, nil
+}
+
+// clientHandoff — общая handoff-ветка EP-05 (ТЗ §4): клиент попросил
+// менеджера кнопкой (confirmText — настроенное подтверждение) либо Эмма
+// распознала просьбу маркером {{handoff}} (confirmText пуст: собственный
+// ответ Эммы уже ушёл штатно, второй текст НЕ шлётся — ТЗ §4 п.2).
+//
+// Порядок шагов минимизирует ущерб при падении посередине: режим и контур
+// напоминаний взводятся ДО подтверждения клиенту — упавший Send подтверждения
+// теряет только текст, менеджер уже уведомлён и напоминание стоит.
+func (p *Processor) clientHandoff(ctx context.Context, lead *models.Lead, inbound *models.Message, tgMsgID int, confirmText string, log *slog.Logger) error {
+	d := p.deps
+
+	// 1) Режим human механизмом M13: Эмма замолкает, менеджер ещё не взял
+	// (taken_by NULL), пауза автопилота не смешивается с human.
+	err := d.Leads.UpdateFields(ctx, lead.ID, map[string]interface{}{
+		"dialog_mode":        models.DialogModeHuman,
+		"bot_silenced_until": nil,
+		"taken_by":           nil,
+	})
+	if errors.Is(err, repo.ErrNotFound) {
+		log.Warn("worker: лид стёрт, handoff не нужен")
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("worker: handoff: перевод в режим human: %w", err)
+	}
+	lead.DialogMode = models.DialogModeHuman
+	lead.BotSilencedUntil = nil
+	lead.TakenBy = nil
+
+	// 2) WS: карточка в Kanban подсвечивается «требует ответа» (фронт M13
+	// понимает dialog_mode; reason client_handoff — контракт EP-07).
+	if d.Pub != nil {
+		if err := d.Pub.Publish(ctx, events.DialogModeEvent(lead, events.ReasonClientHandoff)); err != nil {
+			log.Warn("worker: событие dialog_mode не опубликовано", "error", err)
+		}
+	}
+
+	// 3) Уведомление менеджерам в Telegram — канал M13 (уточнение ТЗ §4
+	// п.4: ManagerChatID, НЕ alert_chat_id — тот для алертов EP-06).
+	p.notifyManagerHandoff(lead, log)
+
+	// 4) Немедленный взвод takeover:reminder по образцу M13 (тот же
+	// TaskID-паттерн lead+message_count): менеджер молчит reminder_minutes →
+	// напоминание, ещё pickup_minutes → Эмма подхватывает штатным контуром
+	// (автоподхват 10+10 сохраняется и для client-handoff, ТЗ §10 п.7).
+	if err := p.armHandoffReminder(ctx, lead, inbound, tgMsgID, log); err != nil {
+		return err
+	}
+
+	// 5) Подтверждение клиенту — только для кнопки (Claude не вызывался).
+	if confirmText != "" {
+		tokens := estimateTokens(confirmText)
+		author := models.AuthorBot
+		out := &models.Message{LeadID: lead.ID, Author: &author, Content: confirmText, Tokens: &tokens}
+		if err := d.Msgs.CreateOutbound(ctx, out); err != nil {
+			return fmt.Errorf("worker: handoff: сохранение подтверждения: %w", err)
+		}
+		p.publishMessage(ctx, out, lead.StageID, log)
+		if err := p.sendReply(ctx, lead.TelegramUserID, confirmText); err != nil {
+			return fmt.Errorf("worker: handoff: отправка подтверждения: %w", err)
+		}
+	}
+
+	// 6) След в статистике (вкладка 6 читается в EP-06). Best effort.
+	p.recordEvent(ctx, &models.EmmaEvent{
+		EventType: models.EmmaEventHandoff,
+		LeadID:    &lead.ID,
+	}, log)
+
+	log.Info("worker: клиент передан менеджеру",
+		"trigger", map[bool]string{true: "button", false: "marker"}[confirmText != ""])
+	return nil
+}
+
+// notifyManagerHandoff — «Клиент <имя/username> просит менеджера (лид #N)»
+// в чат менеджеров. Best effort: недоставленное уведомление не роняет
+// handoff — напоминание reminder_minutes продублирует сигнал.
+func (p *Processor) notifyManagerHandoff(lead *models.Lead, log *slog.Logger) {
+	if p.deps.ManagerChatID == 0 {
+		return // чат менеджеров не сконфигурирован — остаёмся при логе
+	}
+	text := fmt.Sprintf("🙋 CRM: клиент %s просит менеджера (лид #%d). Возьмите диалог в карточке.",
+		leadDisplayName(lead), lead.ID)
+	if err := p.deps.Sender.Send(p.deps.ManagerChatID, text); err != nil {
+		log.Error("worker: уведомление о handoff не доставлено", "error", err)
+	}
+}
+
+// leadDisplayName — имя лида для уведомления: name → @username → #id.
+func leadDisplayName(l *models.Lead) string {
+	switch {
+	case l.Name != nil && strings.TrimSpace(*l.Name) != "":
+		return strings.TrimSpace(*l.Name)
+	case l.TgUsername != nil && *l.TgUsername != "":
+		return "@" + *l.TgUsername
+	default:
+		return fmt.Sprintf("#%d", l.ID)
+	}
+}
+
+// armHandoffReminder — взвод takeover:reminder сразу при handoff (EP-05):
+// в отличие от armTakeoverReminder не проверяет «последнее сообщение —
+// inbound» (подтверждение кнопки легально ложится outbound'ом следом);
+// самогашение штатное — HandleReminder видит ответ менеджера и гаснет.
+// Дедуп — TaskID (lead, message_count): повторная доставка не плодит задач.
+func (p *Processor) armHandoffReminder(ctx context.Context, lead *models.Lead, inbound *models.Message, tgMsgID int, log *slog.Logger) error {
+	d := p.deps
+	if d.TakeoverEnq == nil || d.Settings == nil {
+		return nil // юнит-тесты M3: контур напоминаний не собран
+	}
+	delay := time.Duration(d.Settings.Minutes(ctx, settings.KeyReminderMinutes)) * time.Minute
+	err := d.TakeoverEnq.EnqueueTakeoverReminder(ctx, queue.TakeoverPayload{
+		LeadID:       lead.ID,
+		MessageCount: lead.MessageCount,
+		InboundMsgID: inbound.ID,
+		InboundAt:    inbound.CreatedAt,
+		TgMsgID:      tgMsgID,
+	}, delay)
+	switch {
+	case errors.Is(err, queue.ErrDuplicate):
+		return nil // уже взведено (дубль апдейта) — §4.5 в работе
+	case err != nil:
+		return fmt.Errorf("worker: handoff: постановка напоминания: %w", err)
+	}
+	log.Info("worker: взведено напоминание менеджеру о handoff", "delay", delay.String())
+	return nil
+}
+
+// contactsSection — секция контактов для system-блока (EP-05): активные
+// контакты из провайдера (кэш 30 с). Без провайдера (юнит-тесты M3) и при
+// пустом списке секции нет; боевой провайдер ошибок не возвращает
+// (деградация внутри).
+func (p *Processor) contactsSection(ctx context.Context, log *slog.Logger) string {
+	if p.deps.Contacts == nil {
+		return ""
+	}
+	contacts, err := p.deps.Contacts.Active(ctx)
+	if err != nil {
+		log.Warn("worker: список контактов для секции не получен, секция пропущена", "error", err)
+		return ""
+	}
+	return contactsSection(contacts)
 }
 
 // promptConfig — активная конфигурация промпта. Без провайдера (юнит-тесты

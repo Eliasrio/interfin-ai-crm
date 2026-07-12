@@ -229,6 +229,12 @@ type fakeSender struct {
 	docs    []sentFile
 	photos  []sentFile
 	fileErr error // ошибка КАЖДОГО SendDocument/SendPhoto — сценарий telegram_api
+
+	// EP-05: ветвление клавиатуры. keyboard[i] — текст кнопки i-го
+	// SendWithKeyboard; removed — тексты, ушедшие с RemoveKeyboard.
+	keyboard []sent
+	buttons  []string
+	removed  []sent
 }
 
 func (f *fakeSender) Typing(chatID int64) error {
@@ -267,6 +273,31 @@ func (f *fakeSender) SendPhoto(chatID int64, path string) error {
 		return f.fileErr
 	}
 	f.photos = append(f.photos, sentFile{chatID: chatID, path: path})
+	return nil
+}
+
+func (f *fakeSender) SendWithKeyboard(chatID int64, text, buttonText string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.sendErr != nil {
+		err := f.sendErr
+		f.sendErr = nil
+		return err
+	}
+	f.keyboard = append(f.keyboard, sent{chatID: chatID, text: text})
+	f.buttons = append(f.buttons, buttonText)
+	return nil
+}
+
+func (f *fakeSender) SendRemoveKeyboard(chatID int64, text string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.sendErr != nil {
+		err := f.sendErr
+		f.sendErr = nil
+		return err
+	}
+	f.removed = append(f.removed, sent{chatID: chatID, text: text})
 	return nil
 }
 

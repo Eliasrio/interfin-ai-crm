@@ -122,6 +122,12 @@ func MessageEvent(m *models.Message, stageID int16) Event {
 // (M13): фронт отличает его от ручного «Вернуть Эмме» и показывает тост.
 const ReasonTakeoverPickup = "takeover_pickup"
 
+// ReasonClientHandoff — Reason события dialog_mode при переводе на менеджера
+// по просьбе клиента (EP-05: кнопка или маркер {{handoff}}). Существующий
+// обработчик dialog_mode фронта (M13) его понимает как доп. поле; EP-07
+// подсвечивает карточку «требует ответа».
+const ReasonClientHandoff = "client_handoff"
+
 // DialogModeEvent собирает событие dialog_mode из актуального лида (M13) —
 // единая точка для всех публикаторов (ручка режима, автопилот, подхват).
 // Событие несёт состояние целиком: mode + silenced_until + taken_by.
