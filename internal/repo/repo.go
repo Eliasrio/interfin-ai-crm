@@ -256,6 +256,53 @@ type EmmaEventsRepo interface {
 	Create(ctx context.Context, ev *models.EmmaEvent) error
 }
 
+// EmmaStatsRepo — чтение статистики вкладки 6 (EP-06). Отдельный от
+// EmmaEventsRepo контракт: воркеру нужен только Create, ручке /api/emma/stats —
+// только чтение (узкие интерфейсы — фейки воркера не задеваются).
+type EmmaStatsRepo interface {
+	// Stats — агрегаты emma_events за [from, to): ответы (count/avg/p95/
+	// токены), handoff, файлы (всего и по каждому send_file_id с именем),
+	// ошибки по error_kind.
+	Stats(ctx context.Context, from, to time.Time) (*EmmaStats, error)
+	// ListErrors — журнал ошибок за [from, to): 50 на страницу (page с 1),
+	// новые сверху, фильтр по error_kind (пусто — все), total по фильтру.
+	ListErrors(ctx context.Context, kind string, from, to time.Time, page int) ([]models.EmmaEvent, int64, error)
+	// DialogStats — метрики leads/messages: новые лиды и входящие/исходящие
+	// за [from, to); активные диалоги — distinct lead_id по inbound начиная
+	// с activeSince (всегда последние 24 ч независимо от периода, task §3).
+	DialogStats(ctx context.Context, from, to, activeSince time.Time) (*EmmaDialogStats, error)
+}
+
+// EmmaStats — агрегаты emma_events (вкладка 6). Времена — миллисекунды,
+// как в колонке response_time_ms.
+type EmmaStats struct {
+	Replies       int64
+	AvgResponseMs float64
+	P95ResponseMs float64
+	TokensIn      int64
+	TokensOut     int64
+	Handoffs      int64
+	FilesSent     int64
+	Files         []EmmaFileSentCount
+	ErrorsByKind  map[string]int64
+}
+
+// EmmaFileSentCount — счётчик отправок одного файла. SendFileID nil —
+// события файлов, удалённых из библиотеки (0020: ON DELETE SET NULL).
+type EmmaFileSentCount struct {
+	SendFileID *int64
+	Name       string
+	Count      int64
+}
+
+// EmmaDialogStats — метрики диалогов из существующих leads/messages.
+type EmmaDialogStats struct {
+	NewLeads      int64
+	ActiveDialogs int64
+	MessagesIn    int64
+	MessagesOut   int64
+}
+
 // PaymentRepo — payment_events (§8.3).
 type PaymentRepo interface {
 	// Create вставляет событие платёжного gateway. Идемпотентен по

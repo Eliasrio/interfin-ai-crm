@@ -20,7 +20,7 @@ import (
 	"github.com/interfin/interfin-ai-crm/internal/models"
 	"github.com/interfin/interfin-ai-crm/internal/repo"
 	"github.com/interfin/interfin-ai-crm/internal/settings"
-	"github.com/interfin/interfin-ai-crm/internal/worker"
+	"github.com/interfin/interfin-ai-crm/internal/claude"
 )
 
 // Коды ошибок контура промпта — контракт для фронта EP-07.
@@ -80,7 +80,7 @@ func (h *PromptHandler) tokenLimit(ctx context.Context) int {
 }
 
 // promptResponse — тело GET /prompt (оно же — ответ PUT и restore, task §6).
-// token_estimate — та же метрика len/4, что у Budgeter (worker.EstimateTokens):
+// token_estimate — та же метрика len/4, что у Budgeter (claude.EstimateTokens):
 // счётчик фронта EP-07 обязан совпадать с воркером.
 func (h *PromptHandler) promptResponse(ctx context.Context, v *models.EmmaPromptVersion) gin.H {
 	return gin.H{
@@ -89,7 +89,7 @@ func (h *PromptHandler) promptResponse(ctx context.Context, v *models.EmmaPrompt
 		"forbidden_topics": topicsOf(v, h.deps.Log),
 		"style":            v.Style,
 		"created_at":       v.CreatedAt,
-		"token_estimate":   worker.EstimateTokens(v.SystemPrompt),
+		"token_estimate":   claude.EstimateTokens(v.SystemPrompt),
 		"token_limit":      h.tokenLimit(ctx),
 	}
 }
@@ -151,7 +151,7 @@ func (h *PromptHandler) put(c *gin.Context) {
 	// Лимит — на ТЕКСТ промпта (task §6): секции тем/стиля короткие, а
 	// контакты/файлы/RAG считаются на общий бюджет 5000 отдельно.
 	limit := h.tokenLimit(ctx)
-	if estimate := worker.EstimateTokens(req.SystemPrompt); estimate > limit {
+	if estimate := claude.EstimateTokens(req.SystemPrompt); estimate > limit {
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
 			"error":    "промпт длиннее лимита токенов",
 			"code":     CodePromptTooLong,

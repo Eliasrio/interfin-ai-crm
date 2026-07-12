@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"strings"
 	"time"
 
@@ -55,8 +56,10 @@ type Sender interface {
 }
 
 // Completer — вызов Claude (в проде *claude.Client, в тестах фейк).
+// Usage — учёт токенов вкладки 6 (EP-06); расширение сигнатуры = правка
+// всех тестовых фейков (та же грабля M14 №3, что с Sender).
 type Completer interface {
-	Complete(ctx context.Context, system string, msgs []claude.Message) (string, error)
+	Complete(ctx context.Context, system string, msgs []claude.Message) (string, claude.Usage, error)
 }
 
 // Retriever — RAG-поиск по базе знаний (в проде *rag.Retriever, в тестах фейк).
@@ -119,7 +122,24 @@ type ProcessorDeps struct {
 	Panel         PanelSettings
 	ManagerChatID int64
 
+	// EP-06 (алерты): приёмник ошибок/успехов для серий в Redis (в проде
+	// *emma.Notifier — шлёт сама Эмма в emma_panel.alert_chat_id). nil —
+	// алерты выключены (юнит-тесты M3). Вызовы идут из recordEvent: error →
+	// OnError, reply → OnSuccess (сброс серий llm_api/telegram_api).
+	Alerts AlertSink
+
 	Log *slog.Logger
+}
+
+// AlertSink — контур алертов EP-06 (в проде emma.Notifier, в тестах фейк).
+// Оба вызова best effort by design: реализация не возвращает ошибок,
+// внутри — только slog (никаких каскадов, task EP-06 §5).
+type AlertSink interface {
+	// OnError учитывает ошибку kind (llm_api/telegram_api/kb_index — прочие
+	// виды игнорируются) и шлёт алерт при выполнении условий серии.
+	OnError(ctx context.Context, kind, detail string)
+	// OnSuccess сбрасывает серии llm_api/telegram_api (успешный ответ Эммы).
+	OnSuccess(ctx context.Context)
 }
 
 // PanelSettings — строковые ключи панели Эммы (в проде settings.Service,
@@ -142,6 +162,9 @@ func NewProcessor(deps ProcessorDeps) *Processor {
 // Возврат ошибки = ретрай Asynq (3×, backoff 2/8/32с — server.go), затем
 // dead letter + алерт (§6.3). Возврат nil = задача выполнена.
 func (p *Processor) HandleProcessInbound(ctx context.Context, t *asynq.Task) error {
+	// EP-06: метрика времени ответа — от получения задачи воркером до
+	// успешного Send текста (очередь Telegram→вебхук не входит, task §0).
+	start := time.Now()
 	d := p.deps
 	var payload queue.InboundPayload
 	if err := json.Unmarshal(t.Payload(), &payload); err != nil {
@@ -206,8 +229,11 @@ func (p *Processor) HandleProcessInbound(ctx context.Context, t *asynq.Task) err
 	if last := history[len(history)-1]; last.Direction == models.DirectionOutbound {
 		log.Info("worker: ответ уже сохранён, переотправка без вызова Claude")
 		if err := p.sendReply(ctx, lead.TelegramUserID, last.Content); err != nil {
+			p.recordSendError(ctx, lead.ID, err, log)
 			return fmt.Errorf("worker: переотправка ответа: %w", err)
 		}
+		// EP-06: reply-событие здесь НЕ пишется (критерий приёмки): Claude
+		// не вызывался, usage первой попытки утрачен вместе с упавшим Send.
 		return nil
 	}
 
@@ -278,8 +304,12 @@ func (p *Processor) HandleProcessInbound(ctx context.Context, t *asynq.Task) err
 	}
 
 	// 4) Claude. Ошибка (5xx, rate limit, сеть) → ретрай, затем dead letter.
-	reply, err := d.AI.Complete(ctx, system, msgs)
+	// EP-06: каждая неудачная попытка оставляет error-событие (llm_api либо
+	// timeout — по errors.Is) — так серия из трёх ретраев честно доводит
+	// счётчик алертов до порога.
+	reply, usage, err := d.AI.Complete(ctx, system, msgs)
 	if err != nil {
+		p.recordClaudeError(ctx, lead.ID, err, log)
 		return fmt.Errorf("worker: вызов claude: %w", err)
 	}
 
@@ -318,12 +348,33 @@ func (p *Processor) HandleProcessInbound(ctx context.Context, t *asynq.Task) err
 
 		// Send. При падении ретрай уйдёт в ветку переотправки выше.
 		if err := p.sendReply(ctx, lead.TelegramUserID, clean); err != nil {
+			p.recordSendError(ctx, lead.ID, err, log)
 			return fmt.Errorf("worker: отправка ответа: %w", err)
 		}
 	} else {
 		log.Warn("worker: после вырезания маркеров текст пуст, отправляются только файлы",
 			"file_ids", fileIDs)
 	}
+
+	// EP-06: reply-событие — единственный источник учёта расходов Claude
+	// (контракт task §«наружу»: семантику полей не менять без правки stats).
+	// Пишется строго ПОСЛЕ успешного Send текста; при пустом clean (ответ из
+	// одних маркеров) — сразу: Claude вызван, токены оплачены. Welcome,
+	// handoff-подтверждение и подсказка о нетекстовом сюда не попадают —
+	// это ветки без Claude, у них нет ни usage, ни reply-события (осознанно).
+	rt := int(time.Since(start).Milliseconds())
+	if rt == 0 {
+		// Колонка целочисленная в мс; у мгновенного фейка в тестах 0 был бы
+		// неотличим от «не замерено» — фиксируем минимум.
+		rt = 1
+	}
+	p.recordEvent(ctx, &models.EmmaEvent{
+		EventType:      models.EmmaEventReply,
+		LeadID:         &lead.ID,
+		ResponseTimeMs: &rt,
+		TokensIn:       &usage.InputTokens,
+		TokensOut:      &usage.OutputTokens,
+	}, log)
 
 	// 7) Файлы по маркерам — ПОСЛЕ успешного Send текста (ТЗ §3, сводная
 	// схема шаг 5–6). Ошибки внутри не роняют задачу: текст уже ушёл,
@@ -718,16 +769,86 @@ func (p *Processor) recordFileNotFound(ctx context.Context, leadID, fileID int64
 	}, log)
 }
 
-// recordEvent — запись в emma_events (журнал вкладки 6). Best effort:
-// журнал не роняет диалог; nil-репозиторий — режим юнит-тестов M3.
+// recordEvent — запись в emma_events (журнал вкладки 6) + сигнал контуру
+// алертов EP-06 (единая точка: reply сбрасывает серии, error учитывается).
+// Best effort: ни журнал, ни алерты не роняют диалог; nil-репозиторий —
+// режим юнит-тестов M3; алерты не зависят от успеха записи журнала.
 func (p *Processor) recordEvent(ctx context.Context, ev *models.EmmaEvent, log *slog.Logger) {
-	if p.deps.Events == nil {
+	if p.deps.Events != nil {
+		if err := p.deps.Events.Create(ctx, ev); err != nil {
+			log.Warn("worker: событие emma_events не записано",
+				"event_type", ev.EventType, "error", err)
+		}
+	}
+	if p.deps.Alerts == nil {
 		return
 	}
-	if err := p.deps.Events.Create(ctx, ev); err != nil {
-		log.Warn("worker: событие emma_events не записано",
-			"event_type", ev.EventType, "error", err)
+	switch {
+	case ev.EventType == models.EmmaEventReply:
+		p.deps.Alerts.OnSuccess(ctx)
+	case ev.EventType == models.EmmaEventError && ev.ErrorKind != nil:
+		detail := ""
+		if ev.Detail != nil {
+			detail = *ev.Detail
+		}
+		p.deps.Alerts.OnError(ctx, *ev.ErrorKind, detail)
 	}
+}
+
+// errDetailLimit — потолок detail в emma_events: в журнал идёт краткий
+// текст ошибки (у Claude-клиента там статус и message API — промпт клиент
+// в ошибку не кладёт), простыни обрезаются.
+const errDetailLimit = 300
+
+// truncateDetail режет detail до errDetailLimit рун (кириллица — не байты).
+func truncateDetail(s string) string {
+	r := []rune(s)
+	if len(r) <= errDetailLimit {
+		return s
+	}
+	return string(r[:errDetailLimit]) + "…"
+}
+
+// errKindFor — различение таймаута и прикладной ошибки (task §1: по
+// errors.Is): истёкший/отменённый контекст либо net.Error.Timeout
+// (http.Client.Timeout Anthropic, дедлайны Telegram) → timeout, иначе
+// fallback (llm_api для Claude, telegram_api для Send).
+func errKindFor(err error, fallback string) string {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return models.EmmaErrTimeout
+	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return models.EmmaErrTimeout
+	}
+	return fallback
+}
+
+// recordClaudeError — событие error/llm_api|timeout после неудачного
+// Complete (EP-06 §1). Пишется на КАЖДОЙ неудачной попытке: серия ретраев
+// Asynq и должна двигать счётчик алертов.
+func (p *Processor) recordClaudeError(ctx context.Context, leadID int64, cause error, log *slog.Logger) {
+	kind := errKindFor(cause, models.EmmaErrLLMAPI)
+	detail := truncateDetail(cause.Error())
+	p.recordEvent(ctx, &models.EmmaEvent{
+		EventType: models.EmmaEventError,
+		ErrorKind: &kind,
+		Detail:    &detail,
+		LeadID:    &leadID,
+	}, log)
+}
+
+// recordSendError — событие error/telegram_api|timeout после упавшего Send
+// текста ответа (EP-06 §1): и первая попытка, и ветка переотправки.
+func (p *Processor) recordSendError(ctx context.Context, leadID int64, cause error, log *slog.Logger) {
+	kind := errKindFor(cause, models.EmmaErrTelegramAPI)
+	detail := truncateDetail(cause.Error())
+	p.recordEvent(ctx, &models.EmmaEvent{
+		EventType: models.EmmaEventError,
+		ErrorKind: &kind,
+		Detail:    &detail,
+		LeadID:    &leadID,
+	}, log)
 }
 
 // dropIfSilenced — вторая проверка режима (M13, BUG-01): перечитывает лида

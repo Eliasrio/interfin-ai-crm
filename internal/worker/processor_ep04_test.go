@@ -372,7 +372,9 @@ func TestEP04_NoMarkersNoOp(t *testing.T) {
 	if snd.sentCount() != 1 || len(snd.docs)+len(snd.photos) != 0 {
 		t.Errorf("send: %+v docs %+v photos %+v", snd.sent, snd.docs, snd.photos)
 	}
-	if len(msgs.created) != 1 || len(events.events) != 0 {
+	// EP-06: у любого успешного ответа Claude теперь есть reply-событие;
+	// «без файлов» = ни file_sent, ни error.
+	if len(msgs.created) != 1 || len(events.byType(models.EmmaEventFileSent))+len(events.byType(models.EmmaEventError)) != 0 {
 		t.Errorf("messages %+v, события %+v", msgs.created, events.events)
 	}
 }

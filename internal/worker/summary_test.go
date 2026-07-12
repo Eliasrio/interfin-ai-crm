@@ -164,11 +164,11 @@ type recordingAI struct {
 	onComplete func(system string, msgs []claude.Message) string
 }
 
-func (r *recordingAI) Complete(_ context.Context, system string, msgs []claude.Message) (string, error) {
+func (r *recordingAI) Complete(_ context.Context, system string, msgs []claude.Message) (string, claude.Usage, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.calls++
-	return r.onComplete(system, msgs), nil
+	return r.onComplete(system, msgs), claude.Usage{}, nil
 }
 
 // slowAI — Completer с задержкой: удерживает «генерацию» достаточно долго,
@@ -178,7 +178,7 @@ type slowAI struct {
 	delay time.Duration
 }
 
-func (s *slowAI) Complete(ctx context.Context, system string, msgs []claude.Message) (string, error) {
+func (s *slowAI) Complete(ctx context.Context, system string, msgs []claude.Message) (string, claude.Usage, error) {
 	time.Sleep(s.delay)
 	return s.inner.Complete(ctx, system, msgs)
 }

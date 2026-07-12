@@ -19,7 +19,7 @@ import (
 	"github.com/interfin/interfin-ai-crm/internal/models"
 	"github.com/interfin/interfin-ai-crm/internal/repo"
 	"github.com/interfin/interfin-ai-crm/internal/settings"
-	"github.com/interfin/interfin-ai-crm/internal/worker"
+	"github.com/interfin/interfin-ai-crm/internal/claude"
 )
 
 // memPromptRepo — in-memory repo.EmmaPromptRepo: та же дисциплина, что у
@@ -140,8 +140,8 @@ func TestPromptPutCreatesVersionAndGetReturnsIt(t *testing.T) {
 	if m["version_id"].(float64) != 1 || m["system_prompt"] != text || m["style"] != "formal" {
 		t.Fatalf("тело PUT: %v", m)
 	}
-	if got := m["token_estimate"].(float64); int(got) != worker.EstimateTokens(text) {
-		t.Errorf("token_estimate=%v, ждали метрику воркера %d", got, worker.EstimateTokens(text))
+	if got := m["token_estimate"].(float64); int(got) != claude.EstimateTokens(text) {
+		t.Errorf("token_estimate=%v, ждали метрику воркера %d", got, claude.EstimateTokens(text))
 	}
 	if m["token_limit"].(float64) != 1200 {
 		t.Errorf("token_limit=%v, ждали дефолт 1200", m["token_limit"])

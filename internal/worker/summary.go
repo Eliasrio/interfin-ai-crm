@@ -153,7 +153,9 @@ func (s *Summarizer) HandleSummaryGenerate(ctx context.Context, t *asynq.Task) e
 	}
 
 	dialog := flattenDialog(history, existing)
-	summary, err := s.ai.Complete(ctx, summarySystemPrompt, []claude.Message{
+	// usage сводки в emma_events не пишется (EP-06): вкладка 6 учитывает
+	// только ответы лидам, фоновая сводка — не «ответ Эммы».
+	summary, _, err := s.ai.Complete(ctx, summarySystemPrompt, []claude.Message{
 		{Role: claude.RoleUser, Content: dialog},
 	})
 	if err != nil {

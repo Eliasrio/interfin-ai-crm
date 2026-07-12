@@ -228,6 +228,11 @@ func run(log *slog.Logger) error {
 	machine := kanban.NewMachine(leads, msgs, ttlMgr, antiSpamMgr,
 		pub, sender, cfg.Kanban, log)
 
+	// --- EP-06: алерты владельцу — шлёт САМА Эмма (тот же Sender) в
+	// emma_panel.alert_chat_id; серии и анти-шум в Redis (fail-open,
+	// противоположно PIN). Вызовы — из recordEvent-точек processor/emmakb.
+	alerts := emma.NewNotifier(rdb, settingsSvc, sender, log)
+
 	wrk := worker.New(
 		cfg.Redis,
 		worker.NewProcessor(worker.ProcessorDeps{
@@ -252,6 +257,8 @@ func run(log *slog.Logger) error {
 			FilesProv: worker.NewSendFilesProvider(emmaSendFiles, log),
 			SendFiles: emmaSendFiles,
 			Events:    emmaEvents,
+			// EP-06: reply/error-события дополняются алертами владельцу.
+			Alerts: alerts,
 			// EP-05: секция контактов (кэш 30 с), ключи вкладки 5 (welcome/
 			// кнопка/handoff) и чат менеджеров для уведомления о handoff.
 			Contacts:      worker.NewContactsProvider(emmaContacts, log),
@@ -274,7 +281,10 @@ func run(log *slog.Logger) error {
 		Files:   emmaKB,
 		Indexer: rag.NewIndexer(embedder, knowledge, log),
 		Pub:     pub,
-		Log:     log,
+		// EP-06: финальная ошибка индексации → error/kb_index + алерт.
+		Events: emmaEvents,
+		Alerts: alerts,
+		Log:    log,
 	}))
 	// M13: напоминания об ожидающих клиентах и подхват Эммы (LOGIC-01).
 	wrk.RegisterTakeover(worker.NewTakeoverHandlers(worker.TakeoverDeps{
@@ -448,6 +458,17 @@ func run(log *slog.Logger) error {
 		Files: emmaSendFiles,
 		Dir:   cfg.Emma.FilesDir(),
 		Log:   log,
+	}).Register(emmaProtected)
+	// EP-06: статистика (вкладка 6) — сводные метрики, журнал ошибок и
+	// настройка алертов; тест-алерт шлётся тем же Sender, что и алерты.
+	emma.NewStats(emma.StatsDeps{
+		Stats: repo.NewEmmaStats(gormDB),
+		Log:   log,
+	}).Register(emmaProtected)
+	emma.NewAlerts(emma.AlertsDeps{
+		Settings: settingsSvc,
+		Sender:   sender,
+		Log:      log,
 	}).Register(emmaProtected)
 	log.Info("emma panel api registered", "model", cfg.Claude.Model)
 

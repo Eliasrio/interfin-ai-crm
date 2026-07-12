@@ -165,6 +165,8 @@ type rig struct {
 	sendFiles *memSendFilesRepo // EP-04
 	filesDir  string            // EP-04: t.TempDir()
 	contacts  *memContactsRepo  // EP-05
+	stats     *memStatsRepo     // EP-06
+	alertSnd  *memAlertSender   // EP-06
 }
 
 func newRig(t *testing.T, store Store) *rig {
@@ -216,6 +218,12 @@ func newRig(t *testing.T, store Store) *rig {
 		Register(protected)
 	NewScenario(ScenarioDeps{Settings: settingsSvc, Log: log}).
 		Register(protected)
+	// EP-06: статистика и алерты — на той же защищённой группе.
+	statsRepo := &memStatsRepo{}
+	NewStats(StatsDeps{Stats: statsRepo, Log: log}).Register(protected)
+	alertSnd := &memAlertSender{}
+	NewAlerts(AlertsDeps{Settings: settingsSvc, Sender: alertSnd, Log: log}).
+		Register(protected)
 
 	return &rig{
 		router:    r,
@@ -230,6 +238,8 @@ func newRig(t *testing.T, store Store) *rig {
 		sendFiles: sendFiles,
 		filesDir:  filesDir,
 		contacts:  contacts,
+		stats:     statsRepo,
+		alertSnd:  alertSnd,
 	}
 }
 
@@ -326,6 +336,13 @@ var emmaPaths = []struct{ method, path string }{
 	{http.MethodDelete, "/api/emma/contacts/1"},
 	{http.MethodGet, "/api/emma/scenario"},
 	{http.MethodPatch, "/api/emma/scenario"},
+	// EP-06 (критерий приёмки: manager → 403, admin без PIN → 401 на stats
+	// и alerts).
+	{http.MethodGet, "/api/emma/stats"},
+	{http.MethodGet, "/api/emma/stats/errors"},
+	{http.MethodGet, "/api/emma/alerts"},
+	{http.MethodPatch, "/api/emma/alerts"},
+	{http.MethodPost, "/api/emma/alerts/test"},
 }
 
 // --- гейты: роль и PIN-сессия (критерий приёмки 2) ---

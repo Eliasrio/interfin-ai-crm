@@ -311,24 +311,25 @@ type fakeAI struct {
 	mu         sync.Mutex
 	calls      int
 	reply      string
+	usage      claude.Usage // EP-06: usage ответа (нулевой, если не задан)
 	err        error
 	systems    []string // system-промпты входящих вызовов (проверка RAG/summary M4)
 	onComplete func()   // M13: крючок «во время генерации» (гонка BUG-01)
 }
 
-func (f *fakeAI) Complete(_ context.Context, system string, _ []claude.Message) (string, error) {
+func (f *fakeAI) Complete(_ context.Context, system string, _ []claude.Message) (string, claude.Usage, error) {
 	f.mu.Lock()
 	f.calls++
 	f.systems = append(f.systems, system)
-	hook, err, reply := f.onComplete, f.err, f.reply
+	hook, err, reply, usage := f.onComplete, f.err, f.reply, f.usage
 	f.mu.Unlock()
 	if hook != nil {
 		hook()
 	}
 	if err != nil {
-		return "", err
+		return "", claude.Usage{}, err
 	}
-	return reply, nil
+	return reply, usage, nil
 }
 
 func (f *fakeAI) callCount() int {

@@ -33,6 +33,12 @@ const (
 	httpTimeout = 60 * time.Second
 )
 
+// EstimateTokens — грубая локальная оценка токенов len(bytes)/4 (SRS §7.2)
+// без round-trip к Anthropic. Единая правда для Budgeter (worker) и
+// валидации лимита промпта в API панели (EP-02): UI-счётчик обязан
+// совпадать с воркером. Формулу не дублировать.
+func EstimateTokens(text string) int { return len(text) / 4 }
+
 // Message — одна реплика диалога в формате Messages API.
 // Content всегда строка: воркер M3 шлёт только текст.
 type Message struct {
@@ -97,8 +103,17 @@ type contentBlock struct {
 	Text string `json:"text"`
 }
 
+// Usage — счётчики токенов ответа /v1/messages (EP-06: пишутся в
+// emma_events.tokens_in/tokens_out — единственный источник учёта расходов
+// вкладки 6, семантику полей не менять без правки stats).
+type Usage struct {
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
+}
+
 type messagesResponse struct {
 	Content []contentBlock `json:"content"`
+	Usage   Usage          `json:"usage"`
 }
 
 type countTokensResponse struct {
@@ -114,11 +129,12 @@ type apiError struct {
 }
 
 // Complete вызывает /v1/messages и возвращает текст ответа модели
-// (claude_reply_tokens задаёт max_tokens — §7.2). Ошибка не расшифровывается
-// на retryable/фатальную: политика ретраев — забота Asynq (§6.3).
-func (c *Client) Complete(ctx context.Context, system string, msgs []Message) (string, error) {
+// (claude_reply_tokens задаёт max_tokens — §7.2) вместе с usage — учёт
+// расходов вкладки 6 (EP-06). Ошибка не расшифровывается на
+// retryable/фатальную: политика ретраев — забота Asynq (§6.3).
+func (c *Client) Complete(ctx context.Context, system string, msgs []Message) (string, Usage, error) {
 	if len(msgs) == 0 {
-		return "", errors.New("claude: complete: пустой список сообщений")
+		return "", Usage{}, errors.New("claude: complete: пустой список сообщений")
 	}
 	var resp messagesResponse
 	err := c.post(ctx, "/v1/messages", messagesRequest{
@@ -129,7 +145,7 @@ func (c *Client) Complete(ctx context.Context, system string, msgs []Message) (s
 		Thinking:  &thinkingConfig{Type: "disabled"},
 	}, &resp)
 	if err != nil {
-		return "", fmt.Errorf("claude: complete: %w", err)
+		return "", Usage{}, fmt.Errorf("claude: complete: %w", err)
 	}
 
 	var text string
@@ -139,9 +155,9 @@ func (c *Client) Complete(ctx context.Context, system string, msgs []Message) (s
 		}
 	}
 	if text == "" {
-		return "", errors.New("claude: complete: в ответе нет текстовых блоков")
+		return "", resp.Usage, errors.New("claude: complete: в ответе нет текстовых блоков")
 	}
-	return text, nil
+	return text, resp.Usage, nil
 }
 
 // CountTokens — точный подсчёт входных токенов запроса. Вызывается ТОЛЬКО

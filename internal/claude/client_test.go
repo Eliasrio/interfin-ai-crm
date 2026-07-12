@@ -63,10 +63,10 @@ func TestComplete_RequestShapeAndResponse(t *testing.T) {
 			{"type":"text","text":"Здравствуйте! "},
 			{"type":"tool_use","id":"x"},
 			{"type":"text","text":"Чем помочь?"}
-		]}`))
+		],"usage":{"input_tokens":321,"output_tokens":45}}`))
 	})
 
-	reply, err := c.Complete(context.Background(), "system prompt", []Message{
+	reply, usage, err := c.Complete(context.Background(), "system prompt", []Message{
 		{Role: RoleUser, Content: "привет"},
 	})
 	if err != nil {
@@ -74,6 +74,10 @@ func TestComplete_RequestShapeAndResponse(t *testing.T) {
 	}
 	if reply != "Здравствуйте! Чем помочь?" {
 		t.Errorf("reply = %q", reply)
+	}
+	// EP-06: usage — источник учёта расходов вкладки 6.
+	if usage.InputTokens != 321 || usage.OutputTokens != 45 {
+		t.Errorf("usage = %+v, ожидали 321/45", usage)
 	}
 
 	if gotPath != "/v1/messages" {
@@ -106,7 +110,7 @@ func TestComplete_APIError(t *testing.T) {
 		w.Write([]byte(`{"type":"error","error":{"type":"rate_limit_error","message":"limit hit"}}`))
 	})
 
-	_, err := c.Complete(context.Background(), "", []Message{{Role: RoleUser, Content: "hi"}})
+	_, _, err := c.Complete(context.Background(), "", []Message{{Role: RoleUser, Content: "hi"}})
 	if err == nil {
 		t.Fatal("ожидали ошибку API")
 	}
@@ -119,7 +123,7 @@ func TestComplete_EmptyMessages(t *testing.T) {
 	c := newTestClient(t, func(http.ResponseWriter, *http.Request) {
 		t.Error("запрос не должен уходить при пустом списке сообщений")
 	})
-	if _, err := c.Complete(context.Background(), "sys", nil); err == nil {
+	if _, _, err := c.Complete(context.Background(), "sys", nil); err == nil {
 		t.Fatal("ожидали ошибку про пустые messages")
 	}
 }

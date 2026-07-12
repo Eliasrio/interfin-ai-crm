@@ -22,16 +22,15 @@ import (
 	"github.com/interfin/interfin-ai-crm/internal/models"
 )
 
-// charsPerToken — грубая оценка SRS §7.2: estimate := len(text) / 4.
+// charsPerToken — грубая оценка SRS §7.2: estimate := len(text) / 4
+// (обратные пересчёты «токены → байты» в бюджетере и summary).
 const charsPerToken = 4
 
-// estimateTokens — локальная оценка без round-trip к Anthropic.
-func estimateTokens(text string) int { return len(text) / charsPerToken }
-
-// EstimateTokens — публичная обёртка той же метрики len(bytes)/4: единая
-// правда для Budgeter и валидации лимита промпта в API панели (EP-02,
-// ТЗ §3 — UI-счётчик обязан совпадать с воркером). Формулу не дублировать.
-func EstimateTokens(text string) int { return estimateTokens(text) }
+// estimateTokens — локальная оценка len/4 (SRS §7.2). Сама формула живёт
+// в claude.EstimateTokens (EP-06: emma перестала импортировать worker —
+// иначе цикл в тестах worker→emma для контура алертов; UI-счётчик панели
+// EP-02 по-прежнему совпадает с воркером — источник один).
+func estimateTokens(text string) int { return claude.EstimateTokens(text) }
 
 // Counter — точный подсчёт токенов (в проде *claude.Client, в тестах фейк,
 // который заодно считает число вызовов — критерий AQ²-7).

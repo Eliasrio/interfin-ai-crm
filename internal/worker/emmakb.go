@@ -38,7 +38,12 @@ type EmmaKBDeps struct {
 	Files   repo.EmmaKBRepo
 	Indexer KBIndexer
 	Pub     events.Publisher
-	Log     *slog.Logger
+	// EP-06: журнал emma_events (error/kb_index на финальной ошибке
+	// индексации) и алерты владельцу (каждая ошибка kb_index — алерт,
+	// с общим анти-шумом 15 мин). Оба nil — режим тестов EP-03.
+	Events repo.EmmaEventsRepo
+	Alerts AlertSink
+	Log    *slog.Logger
 }
 
 // EmmaKBHandlers — обработчик emma:kb:index (регистрация — RegisterEmmaKB).
@@ -87,6 +92,7 @@ func (h *EmmaKBHandlers) HandleEmmaKBIndex(ctx context.Context, t *asynq.Task) e
 			// Ретраи исчерпаны — фиксируем error, файл не виснет в pending.
 			h.setStatus(ctx, f, models.EmmaKBError, 0,
 				ptr("индексация не удалась: "+err.Error()), log)
+			h.recordIndexError(ctx, f, "индексация не удалась: "+err.Error(), log)
 		}
 		return fmt.Errorf("worker: индексация kb-файла %d: %w", f.ID, err)
 	}
@@ -108,8 +114,27 @@ func (h *EmmaKBHandlers) HandleEmmaKBIndex(ctx context.Context, t *asynq.Task) e
 // fail — перманентная ошибка: status error + WS-событие + SkipRetry.
 func (h *EmmaKBHandlers) fail(ctx context.Context, f *models.EmmaKBFile, msg string, log *slog.Logger) error {
 	h.setStatus(ctx, f, models.EmmaKBError, 0, &msg, log)
+	h.recordIndexError(ctx, f, msg, log)
 	log.Warn("worker: kb-файл не проиндексирован (без ретрая)", "reason", msg)
 	return fmt.Errorf("worker: kb-файл %d: %s: %w", f.ID, msg, asynq.SkipRetry)
+}
+
+// recordIndexError — EP-06: финальный error индексации → событие
+// error/kb_index (detail — имя файла + причина, task §1) + алерт владельцу
+// (каждая ошибка kb_index, task §5). Best effort: журнал и алерты не
+// влияют ни на статус файла, ни на дисциплину ретраев.
+func (h *EmmaKBHandlers) recordIndexError(ctx context.Context, f *models.EmmaKBFile, reason string, log *slog.Logger) {
+	kind := models.EmmaErrKBIndex
+	detail := truncateDetail(f.Filename + ": " + reason)
+	if h.deps.Events != nil {
+		ev := &models.EmmaEvent{EventType: models.EmmaEventError, ErrorKind: &kind, Detail: &detail}
+		if err := h.deps.Events.Create(ctx, ev); err != nil {
+			log.Warn("worker: событие kb_index не записано", "error", err)
+		}
+	}
+	if h.deps.Alerts != nil {
+		h.deps.Alerts.OnError(ctx, kind, detail)
+	}
 }
 
 // setStatus — запись статуса + WS-событие; ошибки только в лог (мы уже
