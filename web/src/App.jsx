@@ -9,6 +9,7 @@ import LoginForm from './components/LoginForm.jsx'
 import Board from './components/Board.jsx'
 import LeadModal from './components/LeadModal.jsx'
 import SettingsModal from './components/SettingsModal.jsx'
+import EmmaPanel from './components/EmmaPanel.jsx'
 import Toasts from './components/Toasts.jsx'
 import ConnectionBadge from './components/ConnectionBadge.jsx'
 
@@ -17,6 +18,8 @@ export default function App() {
   const { alerts, connection } = useStore()
   const [selectedLeadId, setSelectedLeadId] = useState(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  // EP-07: роутера нет — экраны переключаются состоянием (конвенция M10).
+  const [view, setView] = useState('board') // board | emma
   const authed = Boolean(claims)
 
   // Сокет живёт, пока жива сессия. Ключ — authed (bool), не сами claims:
@@ -30,6 +33,7 @@ export default function App() {
       socket.stop()
       store.reset()
       setSelectedLeadId(null)
+      setView('board') // следующий вошедший может оказаться менеджером
     }
   }, [authed])
 
@@ -45,6 +49,13 @@ export default function App() {
             {claims.role} #{claims.sub}
           </span>
           {claims.role === 'admin' && (
+            // EP-07: раздел Эммы. Кнопку видит только admin (ТЗ §2.1) —
+            // UI-гейт; настоящий — RequireRole(admin)+PIN на /api/emma/*.
+            <button className="btn btn-ghost" onClick={() => setView(view === 'emma' ? 'board' : 'emma')}>
+              {view === 'emma' ? '📋 Доска' : '🤖 Эмма'}
+            </button>
+          )}
+          {claims.role === 'admin' && (
             <button className="btn btn-ghost" onClick={() => setSettingsOpen(true)}>
               ⚙ Настройки
             </button>
@@ -54,7 +65,11 @@ export default function App() {
           </button>
         </div>
       </header>
-      <Board onOpenLead={setSelectedLeadId} onMoveLead={moveLead} />
+      {view === 'emma' ? (
+        <EmmaPanel onExit={() => setView('board')} />
+      ) : (
+        <Board onOpenLead={setSelectedLeadId} onMoveLead={moveLead} />
+      )}
       {selectedLeadId != null && (
         <LeadModal
           leadId={selectedLeadId}

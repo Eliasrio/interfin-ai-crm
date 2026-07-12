@@ -20,6 +20,7 @@ import * as auth from './auth.js'
 import * as api from './api.js'
 import * as store from './store.js'
 import * as chat from './chat.js'
+import * as emma from './emma.js'
 
 const FALLBACK_POLL_MS = 5000 // §10.1: polling mode — 5 с
 const RECONNECT_BASE_MS = 500
@@ -126,6 +127,12 @@ export class KanbanSocket {
         this.stopPolling()
         this.catchUp().catch((err) => this.log.warn('kanban: catch-up после live_mode', err))
         store.setConnection('live')
+        return
+      case 'emma_kb_status':
+        // EP-07: финал индексации файла базы знаний — событие панели, не
+        // про лида (lead_id нет): доске не отдаём, иначе fetchUnknownLead
+        // дёрнул бы /api/leads/undefined.
+        emma.applyKbEvent(ev)
         return
       default: {
         // M12: событие message уходит и в чат-панель. Доске оно тоже

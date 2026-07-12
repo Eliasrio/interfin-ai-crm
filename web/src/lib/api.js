@@ -14,19 +14,30 @@ export class ApiError extends Error {
   }
 }
 
-async function rawFetch(path, { method = 'GET', body } = {}) {
+async function rawFetch(path, { method = 'GET', body, form } = {}) {
   const headers = { Authorization: 'Bearer ' + getToken() }
-  if (body !== undefined) headers['Content-Type'] = 'application/json'
-  return globalThis.fetch(path, {
-    method,
-    headers,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  })
+  let payload
+  if (form !== undefined) {
+    // EP-07: multipart-загрузки панели Эммы. Content-Type не ставим —
+    // браузер сам допишет boundary, иначе бэкенд не разберёт форму.
+    payload = form
+  } else if (body !== undefined) {
+    headers['Content-Type'] = 'application/json'
+    payload = JSON.stringify(body)
+  }
+  return globalThis.fetch(path, { method, headers, body: payload })
 }
 
 export async function apiFetch(path, opts = {}) {
   let res = await rawFetch(path, opts)
   if (res.status === 401) {
+    // EP-07: 401 с PIN_* — не протухший JWT, а PIN-контур панели Эммы
+    // (неверный PIN / истекла PIN-сессия): refresh не поможет, а каждый
+    // неверный PIN впустую ротировал бы refresh-токен.
+    const peek = await res.clone().json().catch(() => null)
+    if (peek?.code?.startsWith('PIN_')) {
+      throw new ApiError(peek.error || 'HTTP 401', peek.code, 401, peek)
+    }
     // Тихий refresh (задача M10-6): access живёт 15 мин (§5.1), протухание —
     // штатный ритм, а не ошибка. Не продлилось — logout внутри refresh()
     // уже уронил токен, App перерисуется в LoginForm.
