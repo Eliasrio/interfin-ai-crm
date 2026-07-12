@@ -109,6 +109,10 @@ func run(log *slog.Logger) error {
 	emmaPrompts := repo.NewEmmaPrompts(gormDB)
 	// EP-03: файлы базы знаний панели (вкладка 2, таблица 0017).
 	emmaKB := repo.NewEmmaKB(gormDB)
+	// EP-04: библиотека файлов для отправки (вкладка 3, таблица 0018)
+	// и журнал событий Эммы (таблица 0020).
+	emmaSendFiles := repo.NewEmmaSendFiles(gormDB)
+	emmaEvents := repo.NewEmmaEvents(gormDB)
 
 	// --- Redis: одиночный (dev) или Sentinel (prod), по конфигу ---
 	var rdb redis.UniversalClient
@@ -241,7 +245,12 @@ func run(log *slog.Logger) error {
 			// EP-02: промпт из БД с кэшем 30 с — правка из панели доезжает
 			// до Эммы без рестарта (fallback на константу внутри провайдера).
 			Prompt: worker.NewPromptProvider(emmaPrompts, log),
-			Log:    log,
+			// EP-04: секция файлов (кэш 30 с), валидация маркеров мимо
+			// кэша и журнал file_sent/error.
+			FilesProv: worker.NewSendFilesProvider(emmaSendFiles, log),
+			SendFiles: emmaSendFiles,
+			Events:    emmaEvents,
+			Log:       log,
 		}),
 		summarizer,
 		sender,
@@ -415,6 +424,13 @@ func run(log *slog.Logger) error {
 		Files: emmaKB,
 		Enq:   q,
 		KBDir: cfg.Emma.KBDir(),
+		Log:   log,
+	}).Register(emmaProtected)
+	// EP-04: файлы для отправки (вкладка 3) — CRUD библиотеки; отправку
+	// по маркерам исполняет asynq-воркер выше.
+	emma.NewFiles(emma.FilesDeps{
+		Files: emmaSendFiles,
+		Dir:   cfg.Emma.FilesDir(),
 		Log:   log,
 	}).Register(emmaProtected)
 	log.Info("emma panel api registered", "model", cfg.Claude.Model)

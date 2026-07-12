@@ -306,6 +306,15 @@ const (
 	EmmaEventError    = "error"
 )
 
+// Виды ошибок журнала Эммы (emma_events.error_kind, ТЗ панели §3 вкладка 6).
+const (
+	EmmaErrLLMAPI       = "llm_api"
+	EmmaErrTelegramAPI  = "telegram_api"
+	EmmaErrTimeout      = "timeout"
+	EmmaErrFileNotFound = "file_not_found"
+	EmmaErrKBIndex      = "kb_index"
+)
+
 // EmmaPromptVersion — версия системного промпта Эммы (0016). Активная
 // версия ровно одна — частичный уникальный индекс WHERE is_current.
 type EmmaPromptVersion struct {

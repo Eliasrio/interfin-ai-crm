@@ -153,15 +153,17 @@ func (brokenStore) ResetFails(context.Context, string) error { return errRedisDo
 // --- риг ---
 
 type rig struct {
-	router   *gin.Engine
-	issuer   *auth.Issuer
-	store    Store
-	settings *settings.Service
-	repo     *memSettingsRepo
-	prompts  *memPromptRepo  // EP-02
-	kb       *memKBRepo      // EP-03
-	kbEnq    *fakeKBEnqueuer // EP-03
-	kbDir    string          // EP-03: t.TempDir()
+	router    *gin.Engine
+	issuer    *auth.Issuer
+	store     Store
+	settings  *settings.Service
+	repo      *memSettingsRepo
+	prompts   *memPromptRepo    // EP-02
+	kb        *memKBRepo        // EP-03
+	kbEnq     *fakeKBEnqueuer   // EP-03
+	kbDir     string            // EP-03: t.TempDir()
+	sendFiles *memSendFilesRepo // EP-04
+	filesDir  string            // EP-04: t.TempDir()
 }
 
 func newRig(t *testing.T, store Store) *rig {
@@ -202,17 +204,24 @@ func newRig(t *testing.T, store Store) *rig {
 	kbDir := t.TempDir()
 	NewKB(KBDeps{Files: kbRepo, Enq: kbEnq, KBDir: kbDir, Log: log}).
 		Register(protected)
+	// EP-04: файлы для отправки — на той же защищённой группе.
+	sendFiles := newMemSendFilesRepo()
+	filesDir := t.TempDir()
+	NewFiles(FilesDeps{Files: sendFiles, Dir: filesDir, Log: log}).
+		Register(protected)
 
 	return &rig{
-		router:   r,
-		issuer:   auth.NewIssuer(key, time.Minute),
-		store:    store,
-		settings: settingsSvc,
-		repo:     memRepo,
-		prompts:  prompts,
-		kb:       kbRepo,
-		kbEnq:    kbEnq,
-		kbDir:    kbDir,
+		router:    r,
+		issuer:    auth.NewIssuer(key, time.Minute),
+		store:     store,
+		settings:  settingsSvc,
+		repo:      memRepo,
+		prompts:   prompts,
+		kb:        kbRepo,
+		kbEnq:     kbEnq,
+		kbDir:     kbDir,
+		sendFiles: sendFiles,
+		filesDir:  filesDir,
 	}
 }
 
@@ -295,6 +304,12 @@ var emmaPaths = []struct{ method, path string }{
 	{http.MethodPost, "/api/emma/kb"},
 	{http.MethodPost, "/api/emma/kb/1/reindex"},
 	{http.MethodDelete, "/api/emma/kb/1"},
+	// EP-04 (критерий приёмки: manager → 403, admin без PIN → 401 на всех
+	// ручках files).
+	{http.MethodGet, "/api/emma/files"},
+	{http.MethodPost, "/api/emma/files"},
+	{http.MethodPatch, "/api/emma/files/1"},
+	{http.MethodDelete, "/api/emma/files/1"},
 }
 
 // --- гейты: роль и PIN-сессия (критерий приёмки 2) ---

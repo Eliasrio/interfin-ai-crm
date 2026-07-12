@@ -34,11 +34,18 @@ import (
 const historyFetchLimit = 50
 
 // Sender — отправка в Telegram (в проде обёртка над telebot, в тестах фейк).
+// Расширение интерфейса = правка ВСЕХ тестовых фейков Sender (грабля M14 №3);
+// узкие интерфейсы kanban.Sender и handlers (только Send) не задеваются.
 type Sender interface {
 	// Typing показывает лиду «печатает…» (§6.2 шаг 1). Best effort.
 	Typing(chatID int64) error
 	// Send отправляет текст в чат.
 	Send(chatID int64, text string) error
+	// SendDocument отправляет файл документом (EP-04: PDF; контракт
+	// EP-05/EP-06). fileName — имя файла, которое увидит клиент.
+	SendDocument(chatID int64, path, fileName string) error
+	// SendPhoto отправляет изображение фотографией (EP-04: JPG/PNG).
+	SendPhoto(chatID int64, path string) error
 }
 
 // Completer — вызов Claude (в проде *claude.Client, в тестах фейк).
@@ -85,6 +92,15 @@ type ProcessorDeps struct {
 	// nil — фиксированная константа systemPrompt (юнит-тесты M3, поведение
 	// до EP-02); боевая сборка задаёт CachedPromptProvider.
 	Prompt PromptProvider
+
+	// EP-04 (файлы для отправки). FilesProv — активные файлы для секции
+	// system-блока (кэш 30 с); SendFiles — валидация маркеров GetByID
+	// (мимо кэша) — оба nil в юнит-тестах M3 (секции нет, маркеры
+	// вырезаются, файлы пропускаются). Events — журнал emma_events
+	// (file_sent/error), best effort; nil — журнал не пишется.
+	FilesProv SendFilesProvider
+	SendFiles repo.EmmaSendFilesRepo
+	Events    repo.EmmaEventsRepo
 
 	Log *slog.Logger
 }
@@ -220,7 +236,8 @@ func (p *Processor) HandleProcessInbound(ctx context.Context, t *asynq.Task) err
 	// из провайдера промпта (панель Эммы, кэш 30 с; nil/ошибка — константа),
 	// секции тем/стиля/языка добавляет buildSystemBase (порядок ТЗ §3).
 	summary := p.loadSummary(ctx, lead.ID, log)
-	base := buildSystemBase(p.promptConfig(ctx, log), lead.Language)
+	base := buildSystemBase(p.promptConfig(ctx, log), lead.Language,
+		p.filesSection(ctx, log)) // EP-04: секция 7 (файлы); секция 6 (контакты) — EP-05
 	system, msgs, stats, err := d.Budgeter.Build(ctx, composeSystemPrompt(base, chunks), summary, history)
 	if err != nil {
 		return fmt.Errorf("worker: сборка контекста: %w", err)
@@ -232,6 +249,20 @@ func (p *Processor) HandleProcessInbound(ctx context.Context, t *asynq.Task) err
 		return fmt.Errorf("worker: вызов claude: %w", err)
 	}
 
+	// 4.5) Маркер-протокол (EP-04, ТЗ §3): маркеры вырезаются ДО
+	// CreateOutbound — в БД, историю диалога и событие M12 уходит чистый
+	// текст. id файлов живут только в памяти обработчика: ветка
+	// переотправки выше вложения не восстанавливает (осознанное
+	// упрощение v1, ТЗ §3).
+	clean, fileIDs, handoff, unknown := ParseMarkers(reply)
+	if len(unknown) > 0 {
+		log.Warn("worker: нераспознанные маркеры вырезаны из ответа", "markers", unknown)
+	}
+	if handoff {
+		// EP-04 только вырезает и логирует: перевод режима — EP-05.
+		log.Info("worker: handoff-маркер получен, обработка — EP-05")
+	}
+
 	// M13, BUG-01 (проверка №2): менеджер мог забрать диалог за время
 	// генерации (3–15 с). Режим перечитывается из БД НЕПОСРЕДСТВЕННО перед
 	// сохранением: сменился — ответ отбрасывается без записи и без Send
@@ -240,22 +271,36 @@ func (p *Processor) HandleProcessInbound(ctx context.Context, t *asynq.Task) err
 		return err
 	}
 
-	// 5) Save outbound. Счётчики лида НЕ трогаем (CLAUDE.md §4.3).
-	replyTokens := estimateTokens(reply)
-	author := models.AuthorBot
-	out := &models.Message{LeadID: lead.ID, Author: &author, Content: reply, Tokens: &replyTokens}
-	if err := d.Msgs.CreateOutbound(ctx, out); err != nil {
-		return fmt.Errorf("worker: сохранение ответа: %w", err)
-	}
-	// M12: событие message сразу после save, а не после send: ветка
-	// переотправки (ретрай упавшего Send) второй раз НЕ публикует.
-	p.publishMessage(ctx, out, lead.StageID, log)
+	// 5–6) Save → Send чистого текста. Ответ из одних маркеров легально
+	// пуст — Telegram пустой текст не примет, шаг пропускается (файлы ниже
+	// оставят свои [файл: …] в истории, ретрай в Claude не пойдёт).
+	if clean != "" {
+		// Save outbound. Счётчики лида НЕ трогаем (CLAUDE.md §4.3).
+		replyTokens := estimateTokens(clean)
+		author := models.AuthorBot
+		out := &models.Message{LeadID: lead.ID, Author: &author, Content: clean, Tokens: &replyTokens}
+		if err := d.Msgs.CreateOutbound(ctx, out); err != nil {
+			return fmt.Errorf("worker: сохранение ответа: %w", err)
+		}
+		// M12: событие message сразу после save, а не после send: ветка
+		// переотправки (ретрай упавшего Send) второй раз НЕ публикует.
+		p.publishMessage(ctx, out, lead.StageID, log)
 
-	// 6) Send. При падении ретрай уйдёт в ветку переотправки выше.
-	if err := d.Sender.Send(lead.TelegramUserID, reply); err != nil {
-		return fmt.Errorf("worker: отправка ответа: %w", err)
+		// Send. При падении ретрай уйдёт в ветку переотправки выше.
+		if err := d.Sender.Send(lead.TelegramUserID, clean); err != nil {
+			return fmt.Errorf("worker: отправка ответа: %w", err)
+		}
+	} else {
+		log.Warn("worker: после вырезания маркеров текст пуст, отправляются только файлы",
+			"file_ids", fileIDs)
 	}
 
+	// 7) Файлы по маркерам — ПОСЛЕ успешного Send текста (ТЗ §3, сводная
+	// схема шаг 5–6). Ошибки внутри не роняют задачу: текст уже ушёл,
+	// ретрай продублировал бы ответ клиенту.
+	p.sendMarkedFiles(ctx, lead, fileIDs, log)
+
+	replyTokens := estimateTokens(clean)
 	log.Info("worker: ответ отправлен",
 		"rag_chunks", len(chunks),
 		"summary_used", summary != "",
@@ -281,6 +326,136 @@ func (p *Processor) promptConfig(ctx context.Context, log *slog.Logger) PromptCo
 		return fallbackPromptConfig()
 	}
 	return cfg
+}
+
+// filesSection — секция файлов для system-блока (EP-04): активные файлы из
+// провайдера (кэш 30 с). Без провайдера (юнит-тесты M3) и при пустом списке
+// секции нет; боевой провайдер ошибок не возвращает (деградация внутри).
+func (p *Processor) filesSection(ctx context.Context, log *slog.Logger) string {
+	if p.deps.FilesProv == nil {
+		return ""
+	}
+	files, err := p.deps.FilesProv.Active(ctx)
+	if err != nil {
+		log.Warn("worker: список файлов для секции не получен, секция пропущена", "error", err)
+		return ""
+	}
+	return sendFilesSection(files)
+}
+
+// sendMarkedFiles — отправка файлов по маркерам {{file:N}} (EP-04, ТЗ §3):
+// валидация id по БД (мимо кэша — выключенный файл отсекается сразу),
+// PDF → SendDocument, JPG/PNG → SendPhoto, по одному сообщению на файл
+// (sendMediaGroup не используем). После успеха — служебная запись
+// «[файл: <name>]» в messages (след в чате менеджера M12) + emma_events
+// file_sent. Любая ошибка здесь НЕ роняет задачу: текст уже ушёл клиенту,
+// ретрай продублировал бы ответ — только журнал и slog.
+func (p *Processor) sendMarkedFiles(ctx context.Context, lead *models.Lead, fileIDs []int64, log *slog.Logger) {
+	d := p.deps
+	if len(fileIDs) == 0 {
+		return
+	}
+	if d.SendFiles == nil {
+		log.Warn("worker: маркеры файлов получены, но библиотека файлов не подключена",
+			"file_ids", fileIDs)
+		return
+	}
+	for _, id := range fileIDs {
+		f, err := d.SendFiles.GetByID(ctx, id)
+		switch {
+		case errors.Is(err, repo.ErrNotFound):
+			p.recordFileNotFound(ctx, lead.ID, id, "файл не найден", log)
+			continue
+		case err != nil:
+			// БД мигнула между ответом и отправкой: ретраить нельзя (текст
+			// ушёл) — файл пропускается, след остаётся в логе.
+			log.Error("worker: файл маркера не прочитан из БД", "send_file_id", id, "error", err)
+			continue
+		}
+		if !f.IsActive {
+			p.recordFileNotFound(ctx, lead.ID, id, "файл выключен", log)
+			continue
+		}
+
+		if err := p.sendFile(lead.TelegramUserID, f); err != nil {
+			log.Error("worker: файл не отправлен в Telegram",
+				"send_file_id", f.ID, "name", f.Name, "error", err)
+			kind, detail := models.EmmaErrTelegramAPI, err.Error()
+			p.recordEvent(ctx, &models.EmmaEvent{
+				EventType:  models.EmmaEventError,
+				ErrorKind:  &kind,
+				Detail:     &detail,
+				LeadID:     &lead.ID,
+				SendFileID: &f.ID,
+			}, log)
+			continue
+		}
+
+		// След в чате менеджера (M12): служебная запись author=bot.
+		// Файл уже у клиента — ошибка записи следа задачу не роняет.
+		note := "[файл: " + f.Name + "]"
+		noteTokens := estimateTokens(note)
+		author := models.AuthorBot
+		out := &models.Message{LeadID: lead.ID, Author: &author, Content: note, Tokens: &noteTokens}
+		if err := d.Msgs.CreateOutbound(ctx, out); err != nil {
+			log.Warn("worker: след отправки файла не сохранён",
+				"send_file_id", f.ID, "error", err)
+		} else {
+			p.publishMessage(ctx, out, lead.StageID, log)
+		}
+
+		p.recordEvent(ctx, &models.EmmaEvent{
+			EventType:  models.EmmaEventFileSent,
+			LeadID:     &lead.ID,
+			SendFileID: &f.ID,
+		}, log)
+		log.Info("worker: файл отправлен клиенту",
+			"send_file_id", f.ID, "name", f.Name, "mime", f.MimeType)
+	}
+}
+
+// sendFile — ветвление по mime (ТЗ §3): изображения фотографией, остальное
+// (PDF) документом. Документу — человекочитаемое имя: на диске файл лежит
+// под UUID, клиент должен увидеть название из панели.
+func (p *Processor) sendFile(chatID int64, f *models.EmmaSendFile) error {
+	if strings.HasPrefix(f.MimeType, "image/") {
+		return p.deps.Sender.SendPhoto(chatID, f.FilePath)
+	}
+	fileName := f.Name
+	if f.MimeType == "application/pdf" && !strings.HasSuffix(strings.ToLower(fileName), ".pdf") {
+		fileName += ".pdf"
+	}
+	return p.deps.Sender.SendDocument(chatID, f.FilePath, fileName)
+}
+
+// recordFileNotFound — событие error/file_not_found: Эмма сослалась на
+// несуществующий или выключенный файл (маркер уже вырезан, клиент ничего
+// не заметил — след для вкладки 6 и алертов EP-06).
+func (p *Processor) recordFileNotFound(ctx context.Context, leadID, fileID int64, why string, log *slog.Logger) {
+	log.Error("worker: маркер ссылается на недоступный файл",
+		"send_file_id", fileID, "reason", why)
+	kind := models.EmmaErrFileNotFound
+	detail := fmt.Sprintf("маркер {{file:%d}}: %s", fileID, why)
+	p.recordEvent(ctx, &models.EmmaEvent{
+		EventType: models.EmmaEventError,
+		ErrorKind: &kind,
+		Detail:    &detail,
+		LeadID:    &leadID,
+		// send_file_id НЕ пишем: файла либо нет (FK бы упал), либо он
+		// выключен — для статистики «ошибка file_not_found» id живёт в detail.
+	}, log)
+}
+
+// recordEvent — запись в emma_events (журнал вкладки 6). Best effort:
+// журнал не роняет диалог; nil-репозиторий — режим юнит-тестов M3.
+func (p *Processor) recordEvent(ctx context.Context, ev *models.EmmaEvent, log *slog.Logger) {
+	if p.deps.Events == nil {
+		return
+	}
+	if err := p.deps.Events.Create(ctx, ev); err != nil {
+		log.Warn("worker: событие emma_events не записано",
+			"event_type", ev.EventType, "error", err)
+	}
 }
 
 // dropIfSilenced — вторая проверка режима (M13, BUG-01): перечитывает лида

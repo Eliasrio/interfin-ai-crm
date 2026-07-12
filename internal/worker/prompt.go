@@ -85,9 +85,9 @@ func forbiddenTopicsSection(topics []string) string {
 // ТЗ §3 «Сборка system-блока»: 1) промпт из БД (правила про счета менеджера
 // M12 — внутри текста, отдельной код-вставки нет — уточнение task EP-02);
 // 2) запретные темы; 3) стиль; 4) языковая инструкция M14 (код, не
-// редактируется). Секции 6–7 (контакты EP-05, файлы EP-04) добавляются
-// сюда же элементами sections; RAG-чанки приклеивает composeSystemPrompt.
-func buildSystemBase(cfg PromptConfig, language *string) string {
+// редактируется). extras — секции 6–7 в порядке ТЗ (контакты EP-05, файлы
+// EP-04); пустые пропускаются. RAG-чанки приклеивает composeSystemPrompt.
+func buildSystemBase(cfg PromptConfig, language *string, extras ...string) string {
 	sections := []string{cfg.Text}
 	if s := forbiddenTopicsSection(cfg.ForbiddenTopics); s != "" {
 		sections = append(sections, s)
@@ -96,7 +96,30 @@ func buildSystemBase(cfg PromptConfig, language *string) string {
 		sections = append(sections, s)
 	}
 	sections = append(sections, languageInstruction(language))
+	for _, s := range extras {
+		if s != "" {
+			sections = append(sections, s)
+		}
+	}
 	return strings.Join(sections, "\n\n")
+}
+
+// sendFilesSection — секция библиотеки файлов (EP-04, ТЗ §3 вкладка 3):
+// перечень активных файлов с подсказками-описаниями и инструкция
+// маркер-протокола. Пустой список — секции нет (и Эмма про файлы не знает).
+func sendFilesSection(files []models.EmmaSendFile) string {
+	if len(files) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("Тебе доступны файлы для отправки клиенту:")
+	for _, f := range files {
+		fmt.Fprintf(&b, "\n[id=%d] %s — %s", f.ID, f.Name, f.Description)
+	}
+	fmt.Fprintf(&b, "\nЧтобы отправить файл, добавь В КОНЕЦ ответа маркер {{file:%d}}, "+
+		"подставив id нужного файла. Можно несколько маркеров — по одному на файл. "+
+		"Не упоминай маркеры и номера файлов в тексте ответа.", files[0].ID)
+	return b.String()
 }
 
 // languageNames — язык лида → название для языковой инструкции system-блока.

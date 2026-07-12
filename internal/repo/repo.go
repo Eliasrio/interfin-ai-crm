@@ -184,6 +184,45 @@ type EmmaKBRepo interface {
 	Delete(ctx context.Context, id int64) (*models.EmmaKBFile, error)
 }
 
+// EmmaSendFilesRepo — emma_send_files (EP-04, ТЗ панели §3): библиотека
+// файлов, которые Эмма отправляет клиентам по маркеру {{file:N}}.
+type EmmaSendFilesRepo interface {
+	// List — все файлы, новые → старые (вкладка 3).
+	List(ctx context.Context) ([]models.EmmaSendFile, error)
+	// GetByID — файл по id. ErrNotFound, если нет. Валидация маркеров идёт
+	// сюда, мимо 30-секундного кэша секции промпта: выключенный файл
+	// перестаёт проходить валидацию сразу (критерий приёмки EP-04).
+	GetByID(ctx context.Context, id int64) (*models.EmmaSendFile, error)
+	// Create вставляет файл; заполняет f.ID/f.CreatedAt. IsActive задаёт
+	// вызывающий явно (грабля M5: zero value затёр бы DEFAULT TRUE).
+	Create(ctx context.Context, f *models.EmmaSendFile) error
+	// Update точечно меняет name/description/is_active (nil — поле не
+	// трогается); возвращает обновлённую строку. ErrNotFound — нет id.
+	Update(ctx context.Context, id int64, upd EmmaSendFileUpdate) (*models.EmmaSendFile, error)
+	// Delete удаляет строку и возвращает её — file_path нужен, чтобы стереть
+	// файл с диска ПОСЛЕ коммита. emma_events.send_file_id обнуляет БД
+	// (ON DELETE SET NULL, 0020). ErrNotFound — нет id.
+	Delete(ctx context.Context, id int64) (*models.EmmaSendFile, error)
+	// ListActive — только is_active, старые → новые (стабильный порядок
+	// секции промпта). Источник секции файлов system-блока.
+	ListActive(ctx context.Context) ([]models.EmmaSendFile, error)
+}
+
+// EmmaSendFileUpdate — частичное обновление файла (PATCH ТЗ §6):
+// nil-поле не меняется.
+type EmmaSendFileUpdate struct {
+	Name        *string
+	Description *string
+	IsActive    *bool
+}
+
+// EmmaEventsRepo — emma_events (EP-04 пишет file_sent/error, EP-06 читает
+// для статистики). Запись — best effort вызывающего: журнал не роняет диалог.
+type EmmaEventsRepo interface {
+	// Create вставляет событие; заполняет ev.ID/ev.CreatedAt.
+	Create(ctx context.Context, ev *models.EmmaEvent) error
+}
+
 // PaymentRepo — payment_events (§8.3).
 type PaymentRepo interface {
 	// Create вставляет событие платёжного gateway. Идемпотентен по

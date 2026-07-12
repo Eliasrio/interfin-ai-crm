@@ -212,11 +212,23 @@ type sent struct {
 	text   string
 }
 
+// sentFile — вызов SendDocument/SendPhoto (EP-04). fileName пуст у фото.
+type sentFile struct {
+	chatID   int64
+	path     string
+	fileName string
+}
+
 type fakeSender struct {
 	mu      sync.Mutex
 	typing  []int64
 	sent    []sent
 	sendErr error // ошибка ПЕРВОГО Send (потом сбрасывается) — сценарий ретрая
+
+	// EP-04: отправка файлов из библиотеки.
+	docs    []sentFile
+	photos  []sentFile
+	fileErr error // ошибка КАЖДОГО SendDocument/SendPhoto — сценарий telegram_api
 }
 
 func (f *fakeSender) Typing(chatID int64) error {
@@ -235,6 +247,26 @@ func (f *fakeSender) Send(chatID int64, text string) error {
 		return err
 	}
 	f.sent = append(f.sent, sent{chatID: chatID, text: text})
+	return nil
+}
+
+func (f *fakeSender) SendDocument(chatID int64, path, fileName string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.fileErr != nil {
+		return f.fileErr
+	}
+	f.docs = append(f.docs, sentFile{chatID: chatID, path: path, fileName: fileName})
+	return nil
+}
+
+func (f *fakeSender) SendPhoto(chatID int64, path string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.fileErr != nil {
+		return f.fileErr
+	}
+	f.photos = append(f.photos, sentFile{chatID: chatID, path: path})
 	return nil
 }
 

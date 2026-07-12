@@ -56,38 +56,82 @@ type sentMessage struct {
 	Text   string
 }
 
-// telegramMock — минимальный Telegram Bot API для telebot:
-// sendChatAction и sendMessage. Остальные методы не ожидаются.
+// sentTgFile — доставка sendDocument/sendPhoto (EP-04): telebot шлёт файлы
+// multipart'ом — файл в части document/photo, chat_id form-значением.
+type sentTgFile struct {
+	ChatID   string
+	Method   string // sendDocument | sendPhoto
+	FileName string
+	Size     int64
+}
+
+// telegramMock — минимальный Telegram Bot API для telebot: sendChatAction и
+// sendMessage (JSON), sendDocument/sendPhoto (multipart, EP-04). Остальные
+// методы не ожидаются.
 type telegramMock struct {
 	mu      sync.Mutex
 	actions int
 	sent    []sentMessage
+	files   []sentTgFile
 }
 
 func (m *telegramMock) handler(t *testing.T) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+	decodeJSON := func(r *http.Request) map[string]interface{} {
 		var payload map[string]interface{}
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			t.Errorf("telegram mock: тело %s не разобрано: %v", r.URL.Path, err)
 		}
-
+		return payload
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/sendChatAction"):
+			decodeJSON(r)
 			m.actions++
 			fmt.Fprint(w, `{"ok":true,"result":true}`)
 		case strings.HasSuffix(r.URL.Path, "/sendMessage"):
+			payload := decodeJSON(r)
 			m.sent = append(m.sent, sentMessage{
 				ChatID: fmt.Sprint(payload["chat_id"]),
 				Text:   fmt.Sprint(payload["text"]),
 			})
 			fmt.Fprint(w, `{"ok":true,"result":{"message_id":1,"date":1,"chat":{"id":880001,"type":"private"}}}`)
+		case strings.HasSuffix(r.URL.Path, "/sendDocument"), strings.HasSuffix(r.URL.Path, "/sendPhoto"):
+			method, field := "sendDocument", "document"
+			if strings.HasSuffix(r.URL.Path, "/sendPhoto") {
+				method, field = "sendPhoto", "photo"
+			}
+			if err := r.ParseMultipartForm(64 << 20); err != nil {
+				t.Errorf("telegram mock: multipart %s не разобран: %v", r.URL.Path, err)
+			}
+			f := sentTgFile{ChatID: r.FormValue("chat_id"), Method: method}
+			if r.MultipartForm != nil {
+				if fhs := r.MultipartForm.File[field]; len(fhs) > 0 {
+					f.FileName = fhs[0].Filename
+					f.Size = fhs[0].Size
+				}
+			}
+			m.files = append(m.files, f)
+			fmt.Fprint(w, `{"ok":true,"result":{"message_id":2,"date":1,"chat":{"id":880001,"type":"private"}}}`)
 		default:
 			t.Errorf("telegram mock: неожиданный метод %s", r.URL.Path)
 			fmt.Fprint(w, `{"ok":true,"result":true}`)
 		}
 	}
+}
+
+func (m *telegramMock) fileCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.files)
+}
+
+func (m *telegramMock) lastFile() sentTgFile {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.files[len(m.files)-1]
 }
 
 func (m *telegramMock) sentCount() int {
