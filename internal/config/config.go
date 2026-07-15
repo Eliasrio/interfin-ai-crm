@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -84,6 +85,18 @@ type TelegramConfig struct {
 	// https://api.telegram.org; задаётся ТОЛЬКО для e2e M12 — локальный стаб
 	// scripts/tg_stub принимает sendMessage без живого Telegram.
 	APIURL string `mapstructure:"api_url"`
+}
+
+// PublicBaseURL — базовый адрес CRM для deep-link'ов в уведомлениях
+// менеджеру (scheme://host из webhook_url: фронт и вебхук живут на одном
+// домене, отдельная env не нужна). Пусто/не парсится — "" (уведомления
+// остаются без ссылки).
+func (t TelegramConfig) PublicBaseURL() string {
+	u, err := url.Parse(t.WebhookURL)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return ""
+	}
+	return u.Scheme + "://" + u.Host
 }
 
 type DatabaseConfig struct {

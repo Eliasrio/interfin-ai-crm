@@ -134,6 +134,7 @@ func newEP05Rig(t *testing.T, lead *models.Lead, inboundText string, panel fakeP
 		Events:        rig.events,
 		Panel:         panel,
 		ManagerChatID: ep05ManagerChat,
+		PublicURL:     "https://crm.example.test",
 		Log:           testLogger(),
 	})
 	return rig
@@ -265,8 +266,9 @@ func TestEP05_HandoffMarker(t *testing.T) {
 		got[0].LeadID == nil || *got[0].LeadID != 7 {
 		t.Errorf("emma_events handoff: %+v", got)
 	}
-	if n := rig.managerNotices(); len(n) != 1 || !strings.Contains(n[0].text, "лид #7") {
-		t.Errorf("уведомление менеджерам: %+v", n)
+	if n := rig.managerNotices(); len(n) != 1 || !strings.Contains(n[0].text, "лид #7") ||
+		!strings.Contains(n[0].text, "https://crm.example.test/?lead=7") {
+		t.Errorf("уведомление менеджерам (текст + deep-link): %+v", n)
 	}
 }
 

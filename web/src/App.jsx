@@ -4,6 +4,7 @@ import * as api from './lib/api.js'
 import * as auth from './lib/auth.js'
 import * as store from './lib/store.js'
 import { KanbanSocket } from './lib/socket.js'
+import { consumeLeadParam } from './lib/deeplink.js'
 import { useClaims, useStore } from './hooks.js'
 import LoginForm from './components/LoginForm.jsx'
 import Board from './components/Board.jsx'
@@ -21,6 +22,14 @@ export default function App() {
   // EP-07: роутера нет — экраны переключаются состоянием (конвенция M10).
   const [view, setView] = useState('board') // board | emma
   const authed = Boolean(claims)
+
+  // Deep-link из уведомления менеджеру в Telegram: ?lead=<id> открывает
+  // карточку сразу после входа (lib/deeplink.js).
+  useEffect(() => {
+    if (!authed) return
+    const id = consumeLeadParam()
+    if (id != null) setSelectedLeadId(id)
+  }, [authed])
 
   // Сокет живёт, пока жива сессия. Ключ — authed (bool), не сами claims:
   // каждый тихий refresh выпускает новый токен, пересоздавать WS из-за

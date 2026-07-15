@@ -121,6 +121,9 @@ type ProcessorDeps struct {
 	Contacts      ContactsProvider
 	Panel         PanelSettings
 	ManagerChatID int64
+	// PublicURL — базовый адрес CRM (config.Telegram.PublicBaseURL) для
+	// deep-link на карточку лида в уведомлении о handoff; "" = без ссылки.
+	PublicURL string
 
 	// EP-06 (алерты): приёмник ошибок/успехов для серий в Redis (в проде
 	// *emma.Notifier — шлёт сама Эмма в emma_panel.alert_chat_id). nil —
@@ -575,9 +578,21 @@ func (p *Processor) notifyManagerHandoff(lead *models.Lead, log *slog.Logger) {
 	}
 	text := fmt.Sprintf("🙋 CRM: клиент %s просит менеджера (лид #%d). Возьмите диалог в карточке.",
 		leadDisplayName(lead), lead.ID)
+	if link := leadCardURL(p.deps.PublicURL, lead.ID); link != "" {
+		text += "\nОткрыть диалог: " + link
+	}
 	if err := p.deps.Sender.Send(p.deps.ManagerChatID, text); err != nil {
 		log.Error("worker: уведомление о handoff не доставлено", "error", err)
 	}
+}
+
+// leadCardURL — deep-link на карточку лида: фронт открывает её по
+// ?lead=<id> (App.jsx). base пуст — ссылки нет.
+func leadCardURL(base string, id int64) string {
+	if base == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s/?lead=%d", strings.TrimRight(base, "/"), id)
 }
 
 // leadDisplayName — имя лида для уведомления: name → @username → #id.

@@ -40,6 +40,9 @@ type TakeoverDeps struct {
 	// ManagerChatID — Telegram-чат менеджера (cfg.Telegram.ManagerChatID).
 	// 0 = уведомления только в лог, как у алертов dead letter.
 	ManagerChatID int64
+	// PublicURL — базовый адрес CRM для deep-link на карточку лида в
+	// напоминании (config.Telegram.PublicBaseURL); "" = без ссылки.
+	PublicURL string
 	Pub           events.Publisher
 	Log           *slog.Logger
 }
@@ -78,9 +81,13 @@ func (h *TakeoverHandlers) HandleReminder(ctx context.Context, t *asynq.Task) er
 	}
 
 	waiting := waitingMinutes(p.InboundAt)
-	h.notifyManager(fmt.Sprintf(
+	remind := fmt.Sprintf(
 		"⏰ CRM: лид #%d ждёт ответа менеджера уже %d мин (Эмма молчит: диалог взят в работу или на паузе).\nОтветьте из карточки — иначе через %d мин Эмма подхватит сама.",
-		p.LeadID, waiting, d.Settings.Minutes(ctx, settings.KeyPickupMinutes)), log)
+		p.LeadID, waiting, d.Settings.Minutes(ctx, settings.KeyPickupMinutes))
+	if link := leadCardURL(d.PublicURL, p.LeadID); link != "" {
+		remind += "\nОткрыть диалог: " + link
+	}
+	h.notifyManager(remind, log)
 
 	h.publish(ctx, events.Event{
 		Type:           events.TypeTakeoverReminder,

@@ -264,6 +264,7 @@ func run(log *slog.Logger) error {
 			Contacts:      worker.NewContactsProvider(emmaContacts, log),
 			Panel:         settingsSvc,
 			ManagerChatID: cfg.Telegram.ManagerChatID,
+			PublicURL:     cfg.Telegram.PublicBaseURL(),
 			Log:           log,
 		}),
 		summarizer,
@@ -295,6 +296,7 @@ func run(log *slog.Logger) error {
 		InboundEnq:    q,
 		Sender:        sender,
 		ManagerChatID: cfg.Telegram.ManagerChatID,
+		PublicURL:     cfg.Telegram.PublicBaseURL(),
 		Pub:           pub,
 		Log:           log,
 	}))
