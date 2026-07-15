@@ -23,6 +23,15 @@ export default function App() {
   const [view, setView] = useState('board') // board | emma
   const authed = Boolean(claims)
 
+  // Тихое восстановление сессии при холодном открытии страницы: access-токен
+  // живёт только в памяти вкладки (M7), но refresh-cookie на 7 дней уже в
+  // браузере — пробуем её ДО показа формы входа (иначе deep-link из
+  // Telegram каждый раз упирался бы в пароль).
+  const [booting, setBooting] = useState(true)
+  useEffect(() => {
+    auth.refresh().finally(() => setBooting(false))
+  }, [])
+
   // Deep-link из уведомления менеджеру в Telegram: ?lead=<id> открывает
   // карточку сразу после входа (lib/deeplink.js).
   useEffect(() => {
@@ -46,6 +55,7 @@ export default function App() {
     }
   }, [authed])
 
+  if (!authed && booting) return <div className="app-boot muted">Проверяем сессию…</div>
   if (!authed) return <LoginForm />
 
   return (
