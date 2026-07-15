@@ -402,6 +402,7 @@ func run(log *slog.Logger) error {
 		Invoices: payment.NewClient(cfg.Payment),
 		Pub:      pub,
 		Settings: settingsSvc, // M13: автопилот hybrid — пауза после реплики
+		Panel:    settingsSvc, // заготовка приветствия чата (строковые ключи)
 		Log:      log,
 	}).Register(api)
 	// --- M13: human takeover — режим диалога и настройки интервалов ---

@@ -69,7 +69,16 @@ type ChatDeps struct {
 	// при dialog_mode='bot' Эмма ставится на паузу hybrid_pause_minutes.
 	// nil — автопилот выключен (старые тесты M12).
 	Settings settings.Reader
-	Log      *slog.Logger
+	// Panel — строковые ключи настроек (заготовка приветствия чата,
+	// emma_panel.chat_greeting_text). nil — заготовки нет (старые тесты).
+	Panel StringSettings
+	Log   *slog.Logger
+}
+
+// StringSettings — читающий контракт строковых ключей settings (в проде
+// settings.Service, в тестах — фейк). Зеркало worker.PanelSettings.
+type StringSettings interface {
+	String(ctx context.Context, key string) string
 }
 
 // ChatHandler — GET/POST /api/leads/:id/messages и POST /api/leads/:id/invoice.
@@ -86,6 +95,18 @@ func (h *ChatHandler) Register(api gin.IRouter) {
 	api.GET("/leads/:id/messages", h.listMessages)
 	api.POST("/leads/:id/messages", h.postMessage)
 	api.POST("/leads/:id/invoice", h.postInvoice)
+	api.GET("/chat/greeting", h.greeting)
+}
+
+// greeting — GET /api/chat/greeting: заготовка приветствия для кнопки в
+// ChatPanel (правится во вкладке «Сценарий» панели Эммы). Пустой текст —
+// фронт кнопку не рисует.
+func (h *ChatHandler) greeting(c *gin.Context) {
+	text := ""
+	if h.deps.Panel != nil {
+		text = h.deps.Panel.String(c.Request.Context(), settings.KeyChatGreetingText)
+	}
+	c.JSON(http.StatusOK, gin.H{"text": text})
 }
 
 // listMessages — GET /api/leads/:id/messages?limit&before_id: страница

@@ -35,7 +35,8 @@ export default function EmmaScenarioTab({ onDirty }) {
       draft.manager_button_enabled !== base.manager_button_enabled ||
       draft.manager_button_text !== base.manager_button_text ||
       draft.handoff_confirm_text !== base.handoff_confirm_text ||
-      draft.manager_mention !== base.manager_mention)
+      draft.manager_mention !== base.manager_mention ||
+      draft.chat_greeting_text !== base.chat_greeting_text)
 
   useEffect(() => {
     onDirty(Boolean(dirty))
@@ -59,6 +60,7 @@ export default function EmmaScenarioTab({ onDirty }) {
         manager_button_text: draft.manager_button_text,
         handoff_confirm_text: draft.handoff_confirm_text,
         manager_mention: draft.manager_mention,
+        chat_greeting_text: draft.chat_greeting_text,
       })
       load(d)
       store.pushAlert('ok', 'Сохранено, Эмма подхватит в течение 30 секунд')
@@ -124,6 +126,22 @@ export default function EmmaScenarioTab({ onDirty }) {
           onChange={(e) => setDraft({ ...draft, handoff_confirm_text: e.target.value })}
         />
         <small className="muted">Эмма отвечает так на кнопку менеджера и на распознанную просьбу позвать человека.</small>
+      </label>
+
+      <label className="emma-field">
+        <span className="emma-label">Заготовка приветствия в чате карточки</span>
+        <textarea
+          className="emma-textarea"
+          aria-label="Заготовка приветствия в чате"
+          rows={2}
+          placeholder="Здравствуйте, меня зовут Екатерина. Чем могу помочь?"
+          value={draft.chat_greeting_text}
+          onChange={(e) => setDraft({ ...draft, chat_greeting_text: e.target.value })}
+        />
+        <small className="muted">
+          Кнопка «👋 Приветствие» в чате карточки вставляет этот текст в поле ввода — менеджер может поправить и
+          отправить. Пусто — кнопки нет.
+        </small>
       </label>
 
       <label className="emma-field">

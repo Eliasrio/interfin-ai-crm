@@ -47,6 +47,7 @@ func (h *ScenarioHandler) scenarioJSON(ctx context.Context) gin.H {
 		"manager_button_text":    h.deps.Settings.String(ctx, settings.KeyManagerButtonText),
 		"handoff_confirm_text":   h.deps.Settings.String(ctx, settings.KeyHandoffConfirmText),
 		"manager_mention":        h.deps.Settings.String(ctx, settings.KeyManagerMention),
+		"chat_greeting_text":     h.deps.Settings.String(ctx, settings.KeyChatGreetingText),
 	}
 }
 
@@ -63,6 +64,7 @@ type patchScenarioReq struct {
 	ManagerButtonText    *string `json:"manager_button_text"`
 	HandoffConfirmText   *string `json:"handoff_confirm_text"`
 	ManagerMention       *string `json:"manager_mention"`
+	ChatGreetingText     *string `json:"chat_greeting_text"`
 }
 
 // mentionRe — telegram-username: 5-32 символа, латиница/цифры/подчёркивание
@@ -81,7 +83,7 @@ func (h *ScenarioHandler) patch(c *gin.Context) {
 	}
 	if req.WelcomeText == nil && req.ManagerButtonEnabled == nil &&
 		req.ManagerButtonText == nil && req.HandoffConfirmText == nil &&
-		req.ManagerMention == nil {
+		req.ManagerMention == nil && req.ChatGreetingText == nil {
 		apiError(c, http.StatusBadRequest, "нужно хотя бы одно поле", codeValidation)
 		return
 	}
@@ -131,6 +133,10 @@ func (h *ScenarioHandler) patch(c *gin.Context) {
 			return
 		}
 		writes[settings.KeyManagerMention] = &v
+	}
+	if req.ChatGreetingText != nil {
+		v := strings.TrimSpace(*req.ChatGreetingText)
+		writes[settings.KeyChatGreetingText] = &v
 	}
 	for key, val := range writes {
 		if err := h.deps.Settings.SetString(ctx, key, *val); err != nil {

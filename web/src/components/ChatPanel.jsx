@@ -16,6 +16,7 @@ export default function ChatPanel({ lead }) {
   const { leadId, messages, hasMore, loadingOlder, sending } = useChat()
   const [text, setText] = useState('')
   const [invoiceOpen, setInvoiceOpen] = useState(false)
+  const [greeting, setGreeting] = useState('')
   const listRef = useRef(null)
   const stickBottom = useRef(true)
 
@@ -25,6 +26,19 @@ export default function ChatPanel({ lead }) {
       .catch((err) => store.pushAlert('error', `История чата: ${err.message}`, lead.id))
     return () => chat.close()
   }, [lead.id])
+
+  // Заготовка приветствия (вкладка «Сценарий» панели Эммы): пусто — кнопки
+  // нет. Ошибка загрузки не мешает чату — просто без кнопки.
+  useEffect(() => {
+    let alive = true
+    api
+      .fetchChatGreeting()
+      .then((d) => alive && setGreeting((d.text || '').trim()))
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [])
 
   // Автопрокрутка вниз на новых сообщениях — только если менеджер и так
   // был у низа (читает свежее, а не листает архив).
@@ -93,6 +107,17 @@ export default function ChatPanel({ lead }) {
           <button className="btn btn-primary" type="submit" disabled={sending || !text.trim()}>
             {sending ? 'Отправляем…' : 'Отправить'}
           </button>
+          {greeting && (
+            <button
+              className="btn"
+              type="button"
+              disabled={sending}
+              title={greeting}
+              onClick={() => setText(greeting)}
+            >
+              👋 Приветствие
+            </button>
+          )}
           <button className="btn" type="button" onClick={() => setInvoiceOpen((v) => !v)}>
             Выставить счёт
           </button>

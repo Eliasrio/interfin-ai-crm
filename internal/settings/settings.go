@@ -68,6 +68,9 @@ const (
 	// KeyManagerMention — telegram-username (без @) для упоминания в
 	// уведомлениях менеджеру: упоминание пробивает mute группы. Пусто = выкл.
 	KeyManagerMention = "emma_panel.manager_mention"
+	// KeyChatGreetingText — заготовка приветствия менеджера в чате карточки
+	// (кнопка вставки в ChatPanel M12). Пусто = кнопка скрыта.
+	KeyChatGreetingText = "emma_panel.chat_greeting_text"
 )
 
 // StringDefaults — дефолты строковых ключей (EP-01 §2 task-файла).
@@ -81,6 +84,7 @@ var StringDefaults = map[string]string{
 	KeyHandoffConfirmText:   "Сейчас свяжу вас с менеджером, ожидайте",
 	KeyAlertChatID:          "",
 	KeyManagerMention:       "",
+	KeyChatGreetingText:     "Здравствуйте, меня зовут Екатерина. Чем могу помочь?",
 }
 
 // Границы значений для PATCH /api/settings: минуты 1..1440 (сутки).

@@ -125,6 +125,12 @@ export function fetchSettings() {
   return apiFetch('/api/settings')
 }
 
+// fetchChatGreeting — заготовка приветствия для кнопки в чате карточки
+// ({text}; пусто = кнопки нет). Правится во вкладке «Сценарий» панели Эммы.
+export function fetchChatGreeting() {
+  return apiFetch('/api/chat/greeting')
+}
+
 // patchSettings — {ключ: минуты}, только admin (бэкенд отдаёт 403 остальным).
 export function patchSettings(values) {
   return apiFetch('/api/settings', { method: 'PATCH', body: values })

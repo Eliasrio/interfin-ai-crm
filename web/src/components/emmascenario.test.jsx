@@ -17,6 +17,7 @@ const scenarioBody = (over = {}) => ({
   manager_button_text: '',
   handoff_confirm_text: 'Сейчас свяжу вас с менеджером, ожидайте',
   manager_mention: '',
+  chat_greeting_text: '',
   ...over,
 })
 
