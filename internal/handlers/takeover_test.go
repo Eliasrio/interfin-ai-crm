@@ -234,6 +234,56 @@ func TestSettings_ManagerForbidden(t *testing.T) {
 		gin.H{"takeover.reminder_minutes": 5}), http.StatusForbidden, "ERR_FORBIDDEN")
 }
 
+// --- GET/PATCH /api/stages (названия этапов, 2026-07-15) ---
+
+func TestStages_GetDefaultsAndRename(t *testing.T) {
+	rig := newAPIRig(t)
+	manager := rig.token(t, auth.RoleManager)
+	admin := rig.token(t, auth.RoleAdmin)
+
+	// Дефолты видит и manager.
+	m := wantStatus(t, rig.do(t, http.MethodGet, "/api/stages", manager, nil), http.StatusOK, "")
+	names := m["names"].(map[string]any)
+	if names["1"] != "Серые лиды" || names["8"] != "Не удалось" {
+		t.Fatalf("дефолтные названия: %v", names)
+	}
+
+	// Переименование admin'ом видно в GET (пробелы триммятся).
+	m = wantStatus(t, rig.do(t, http.MethodPatch, "/api/stages", admin,
+		gin.H{"1": "  Новые заявки ", "7": "Оплачен договор"}), http.StatusOK, "")
+	names = m["names"].(map[string]any)
+	if names["1"] != "Новые заявки" || names["7"] != "Оплачен договор" || names["2"] != "Живые лиды" {
+		t.Fatalf("после PATCH: %v", names)
+	}
+	m = wantStatus(t, rig.do(t, http.MethodGet, "/api/stages", manager, nil), http.StatusOK, "")
+	if m["names"].(map[string]any)["1"] != "Новые заявки" {
+		t.Fatal("PATCH не доехал до GET")
+	}
+}
+
+func TestStages_Validation(t *testing.T) {
+	rig := newAPIRig(t)
+	admin := rig.token(t, auth.RoleAdmin)
+
+	// Manager не может переименовывать.
+	wantStatus(t, rig.do(t, http.MethodPatch, "/api/stages", rig.token(t, auth.RoleManager),
+		gin.H{"1": "x"}), http.StatusForbidden, "ERR_FORBIDDEN")
+	// Неизвестный этап.
+	wantStatus(t, rig.do(t, http.MethodPatch, "/api/stages", admin,
+		gin.H{"9": "Лишний"}), http.StatusBadRequest, "ERR_UNKNOWN_KEY")
+	// Пустое название; всё-или-ничего — валидный "2" не применяется.
+	wantStatus(t, rig.do(t, http.MethodPatch, "/api/stages", admin,
+		gin.H{"2": "Горячие", "3": "   "}), http.StatusBadRequest, "ERR_VALIDATION")
+	m := wantStatus(t, rig.do(t, http.MethodGet, "/api/stages", admin, nil), http.StatusOK, "")
+	if m["names"].(map[string]any)["2"] != "Живые лиды" {
+		t.Fatal("частичная запись при ошибке валидации")
+	}
+	// Слишком длинное название (61 символ кириллицы).
+	long := strings.Repeat("ы", 61)
+	wantStatus(t, rig.do(t, http.MethodPatch, "/api/stages", admin,
+		gin.H{"4": long}), http.StatusBadRequest, "ERR_VALIDATION")
+}
+
 // TestSettings_EmmaPanelKeysHidden — EP-01: служебный emma_panel.pin_hash
 // (и остальные строковые ключи панели) не света через /api/settings —
 // они управляются только внутренним контуром /api/emma/*.

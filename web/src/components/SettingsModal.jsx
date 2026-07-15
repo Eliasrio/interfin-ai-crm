@@ -5,6 +5,7 @@
 import { useEffect, useState } from 'react'
 import * as api from '../lib/api.js'
 import * as store from '../lib/store.js'
+import { STAGES, applyNames } from '../lib/stages.js'
 
 // FIELDS — известные UI ключи M13; порядок = порядок строк формы.
 const FIELDS = [
@@ -32,6 +33,7 @@ const FIELDS = [
 
 export default function SettingsModal({ onClose }) {
   const [values, setValues] = useState(null) // {key: строка из input}
+  const [names, setNames] = useState(null) // {"1".."8": название этапа}
   const [error, setError] = useState(null)
   const [saving, setSaving] = useState(false)
 
@@ -46,6 +48,10 @@ export default function SettingsModal({ onClose }) {
         setValues(v)
       })
       .catch((err) => alive && setError(err.message))
+    api
+      .fetchStages()
+      .then((d) => alive && setNames({ ...d.names }))
+      .catch((err) => alive && setError(err.message))
     return () => {
       alive = false
     }
@@ -59,15 +65,24 @@ export default function SettingsModal({ onClose }) {
 
   const valid =
     values && FIELDS.every((f) => /^\d+$/.test(values[f.key].trim()) && +values[f.key] >= 1 && +values[f.key] <= 1440)
+  const namesValid =
+    !names || Object.values(names).every((n) => n.trim() !== '' && n.trim().length <= 60)
 
   const save = async () => {
-    if (!valid || saving) return
+    if (!valid || !namesValid || saving) return
     setSaving(true)
     setError(null)
     try {
       const body = {}
       for (const f of FIELDS) body[f.key] = Number(values[f.key])
       await api.patchSettings(body)
+      if (names) {
+        const trimmed = {}
+        for (const [id, n] of Object.entries(names)) trimmed[id] = n.trim()
+        const { names: fresh } = await api.patchStages(trimmed)
+        // Доска перерисуется на pushAlert ниже (подписка useStore в App).
+        applyNames(fresh)
+      }
       store.pushAlert('ok', 'Настройки сохранены')
       onClose()
     } catch (err) {
@@ -104,7 +119,30 @@ export default function SettingsModal({ onClose }) {
               </label>
             ))}
           {values && !valid && <div className="form-error">Интервалы — целые минуты от 1 до 1440.</div>}
-          <button className="btn btn-primary" disabled={!valid || saving} onClick={save}>
+        </section>
+        <section className="modal-section">
+          <h3>Названия этапов</h3>
+          {!names && !error && <div className="muted">Загружаем…</div>}
+          {names &&
+            STAGES.map((s) => (
+              <label key={s.id} className="settings-field">
+                <span>Этап {s.id}</span>
+                <input
+                  aria-label={`Название этапа ${s.id}`}
+                  maxLength={60}
+                  value={names[s.id] ?? ''}
+                  onChange={(e) => setNames({ ...names, [s.id]: e.target.value })}
+                />
+              </label>
+            ))}
+          {names && !namesValid && (
+            <div className="form-error">Название этапа — непустая строка до 60 символов.</div>
+          )}
+          <small className="muted">
+            Меняются только надписи на доске и в карточках. Автоматика этапов (оплата, таймеры, «живой» после 6
+            сообщений) работает как раньше.
+          </small>
+          <button className="btn btn-primary" disabled={!valid || !namesValid || saving} onClick={save}>
             {saving ? 'Сохраняем…' : 'Сохранить'}
           </button>
         </section>

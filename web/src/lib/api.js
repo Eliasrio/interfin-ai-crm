@@ -131,6 +131,16 @@ export function fetchChatGreeting() {
   return apiFetch('/api/chat/greeting')
 }
 
+// fetchStages — эффективные названия этапов ({names: {"1": "...", ...}}).
+export function fetchStages() {
+  return apiFetch('/api/stages')
+}
+
+// patchStages — переименование этапов, только admin ({"1": "Новые заявки"}).
+export function patchStages(names) {
+  return apiFetch('/api/stages', { method: 'PATCH', body: names })
+}
+
 // patchSettings — {ключ: минуты}, только admin (бэкенд отдаёт 403 остальным).
 export function patchSettings(values) {
   return apiFetch('/api/settings', { method: 'PATCH', body: values })

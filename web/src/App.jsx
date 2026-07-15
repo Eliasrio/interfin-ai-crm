@@ -5,6 +5,7 @@ import * as auth from './lib/auth.js'
 import * as store from './lib/store.js'
 import { KanbanSocket } from './lib/socket.js'
 import { consumeLeadParam } from './lib/deeplink.js'
+import { applyNames } from './lib/stages.js'
 import { useClaims, useStore } from './hooks.js'
 import LoginForm from './components/LoginForm.jsx'
 import Board from './components/Board.jsx'
@@ -38,6 +39,25 @@ export default function App() {
     if (!authed) return
     const id = consumeLeadParam()
     if (id != null) setSelectedLeadId(id)
+  }, [authed])
+
+  // Названия этапов с бэка (правятся в ⚙ Настройках): применяем к STAGES и
+  // толкаем перерисовку. Ошибка — не беда, остаются дефолтные названия.
+  const [, setStagesVersion] = useState(0)
+  useEffect(() => {
+    if (!authed) return
+    let alive = true
+    api
+      .fetchStages()
+      .then(({ names }) => {
+        if (!alive) return
+        applyNames(names)
+        setStagesVersion((v) => v + 1)
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
   }, [authed])
 
   // Сокет живёт, пока жива сессия. Ключ — authed (bool), не сами claims:

@@ -73,6 +73,18 @@ const (
 	KeyChatGreetingText = "emma_panel.chat_greeting_text"
 )
 
+// Названия этапов Kanban (правятся в ⚙ Настройках, GET/PATCH /api/stages).
+// Меняются ТОЛЬКО надписи: id этапов, переходы state machine и TTL от
+// названий не зависят (internal/kanban привязан к числовым id).
+const (
+	StageNameKeyPrefix = "kanban.stage_name."
+	FirstStageID       = 1
+	LastStageID        = 8
+)
+
+// StageNameKey — ключ названия этапа id (1..8).
+func StageNameKey(id int) string { return fmt.Sprintf("%s%d", StageNameKeyPrefix, id) }
+
 // StringDefaults — дефолты строковых ключей (EP-01 §2 task-файла).
 // Типизация значения (bool/int) — на потребителе, здесь только строки.
 var StringDefaults = map[string]string{
@@ -85,6 +97,16 @@ var StringDefaults = map[string]string{
 	KeyAlertChatID:          "",
 	KeyManagerMention:       "",
 	KeyChatGreetingText:     "Здравствуйте, меня зовут Екатерина. Чем могу помочь?",
+
+	// Дефолтные названия этапов — зеркало SRS §3.1 (web/src/lib/stages.js).
+	StageNameKeyPrefix + "1": "Серые лиды",
+	StageNameKeyPrefix + "2": "Живые лиды",
+	StageNameKeyPrefix + "3": "Оплачено: ждут ссылку",
+	StageNameKeyPrefix + "4": "Не оплачено",
+	StageNameKeyPrefix + "5": "Консультация назначена",
+	StageNameKeyPrefix + "6": "Отправлено предложение",
+	StageNameKeyPrefix + "7": "Продано",
+	StageNameKeyPrefix + "8": "Не удалось",
 }
 
 // Границы значений для PATCH /api/settings: минуты 1..1440 (сутки).

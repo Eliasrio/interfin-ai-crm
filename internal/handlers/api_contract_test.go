@@ -377,6 +377,7 @@ func newAPIRig(t *testing.T, leads ...*models.Lead) *apiRig {
 	// M13: режим диалога и настройки — как в cmd/server.
 	NewTakeover(TakeoverDeps{Leads: &apiLeads{s: store}, Pub: pub, Log: log}).Register(api)
 	NewSettings(SettingsDeps{Svc: settingsSvc, Log: log}).Register(api)
+	NewStages(StagesDeps{Svc: settingsSvc, Log: log}).Register(api)
 	// M14: язык клиента — как в cmd/server.
 	NewLanguage(LanguageDeps{Leads: &apiLeads{s: store}, Pub: pub, Log: log}).Register(api)
 

@@ -18,6 +18,18 @@ export function stageById(id) {
   return STAGES.find((s) => s.id === id)
 }
 
+// applyNames — переопределения названий с бэка ({"1": "Новые заявки"}):
+// titles выше — дефолты, боевые правятся в ⚙ Настройках (/api/stages).
+// Мутирует STAGES на месте; перерисовку инициирует вызывающий (App после
+// загрузки, SettingsModal после сохранения).
+export function applyNames(names) {
+  if (!names) return
+  for (const s of STAGES) {
+    const t = (names[s.id] ?? names[String(s.id)] ?? '').trim()
+    if (t) s.title = t
+  }
+}
+
 // Кнопки ручных переходов на карточке лида (задача M10-4: Stage 5/6/7).
 // Сам drag-and-drop не ограничен: у актора manager по §3.1 любой переход.
 export const MANUAL_TARGETS = [5, 6, 7]
