@@ -16,6 +16,7 @@ const scenarioBody = (over = {}) => ({
   manager_button_enabled: false,
   manager_button_text: '',
   handoff_confirm_text: 'Сейчас свяжу вас с менеджером, ожидайте',
+  manager_mention: '',
   ...over,
 })
 
@@ -42,6 +43,23 @@ describe('EmmaScenarioTab', () => {
     const patch = fetch.calls.find((c) => c.opts.method === 'PATCH')
     expect(JSON.parse(patch.opts.body).welcome_text).toBe('Привет!')
     expect(store.getState().alerts.some((a) => a.text.includes('Эмма подхватит в течение 30 секунд'))).toBe(true)
+  })
+
+  it('упоминание менеджера уходит в PATCH', async () => {
+    const fetch = mockFetch([
+      {
+        match: (u, o) => u === '/api/emma/scenario' && o.method === 'PATCH',
+        reply: { body: scenarioBody({ manager_mention: 'manager_ivan' }) },
+      },
+      { match: (u) => u === '/api/emma/scenario', reply: { body: scenarioBody() } },
+    ])
+    render(<EmmaScenarioTab onDirty={() => {}} />)
+    const input = await screen.findByLabelText('Упоминание менеджера')
+    fireEvent.change(input, { target: { value: 'manager_ivan' } })
+    fireEvent.click(screen.getByText('Применить'))
+    await waitFor(() => expect(screen.queryByText(/несохранённые изменения/)).toBeNull())
+    const patch = fetch.calls.find((c) => c.opts.method === 'PATCH')
+    expect(JSON.parse(patch.opts.body).manager_mention).toBe('manager_ivan')
   })
 
   it('включённая кнопка менеджера без текста блокирует Применить', async () => {

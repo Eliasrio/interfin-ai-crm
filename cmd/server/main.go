@@ -297,6 +297,7 @@ func run(log *slog.Logger) error {
 		Sender:        sender,
 		ManagerChatID: cfg.Telegram.ManagerChatID,
 		PublicURL:     cfg.Telegram.PublicBaseURL(),
+		Panel:         settingsSvc,
 		Pub:           pub,
 		Log:           log,
 	}))

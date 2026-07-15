@@ -46,11 +46,20 @@ type TakeoverPayload struct {
 	// TgMsgID — telegram message_id инициирующего inbound: pickup ставит
 	// process:inbound с боевым дедуп-ключом DedupKey(lead, msg).
 	TgMsgID int `json:"tg_msg_id"`
+	// Repeat — номер повторного напоминания (эскалация): 0 — первое,
+	// дальше HandleReminder взводит следующее сам, пока повтор успевает
+	// до подхвата. Участвует в TaskID — повторы не гасятся дедупом первого.
+	Repeat int `json:"repeat,omitempty"`
 }
 
-// TakeoverReminderKey — детерминированный TaskID takeover:reminder (§4.5).
-func TakeoverReminderKey(leadID int64, messageCount int) string {
-	sum := sha256.Sum256([]byte(fmt.Sprintf("takeover:reminder:%d:%d", leadID, messageCount)))
+// TakeoverReminderKey — детерминированный TaskID takeover:reminder (§4.5);
+// repeat>0 даёт повтору собственный ключ (эскалация, 2026-07-15).
+func TakeoverReminderKey(leadID int64, messageCount, repeat int) string {
+	raw := fmt.Sprintf("takeover:reminder:%d:%d", leadID, messageCount)
+	if repeat > 0 {
+		raw = fmt.Sprintf("%s:r%d", raw, repeat)
+	}
+	sum := sha256.Sum256([]byte(raw))
 	return hex.EncodeToString(sum[:])
 }
 
@@ -70,7 +79,7 @@ type TakeoverEnqueuer interface {
 
 func (c *Client) EnqueueTakeoverReminder(ctx context.Context, p TakeoverPayload, delay time.Duration) error {
 	return c.enqueueTakeover(ctx, TypeTakeoverReminder,
-		TakeoverReminderKey(p.LeadID, p.MessageCount), p, delay)
+		TakeoverReminderKey(p.LeadID, p.MessageCount, p.Repeat), p, delay)
 }
 
 func (c *Client) EnqueueTakeoverPickup(ctx context.Context, p TakeoverPayload, delay time.Duration) error {

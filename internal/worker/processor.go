@@ -534,7 +534,7 @@ func (p *Processor) clientHandoff(ctx context.Context, lead *models.Lead, inboun
 
 	// 3) Уведомление менеджерам в Telegram — канал M13 (уточнение ТЗ §4
 	// п.4: ManagerChatID, НЕ alert_chat_id — тот для алертов EP-06).
-	p.notifyManagerHandoff(lead, log)
+	p.notifyManagerHandoff(ctx, lead, log)
 
 	// 4) Немедленный взвод takeover:reminder по образцу M13 (тот же
 	// TaskID-паттерн lead+message_count): менеджер молчит reminder_minutes →
@@ -572,11 +572,15 @@ func (p *Processor) clientHandoff(ctx context.Context, lead *models.Lead, inboun
 // notifyManagerHandoff — «Клиент <имя/username> просит менеджера (лид #N)»
 // в чат менеджеров. Best effort: недоставленное уведомление не роняет
 // handoff — напоминание reminder_minutes продублирует сигнал.
-func (p *Processor) notifyManagerHandoff(lead *models.Lead, log *slog.Logger) {
+func (p *Processor) notifyManagerHandoff(ctx context.Context, lead *models.Lead, log *slog.Logger) {
 	if p.deps.ManagerChatID == 0 {
 		return // чат менеджеров не сконфигурирован — остаёмся при логе
 	}
-	text := fmt.Sprintf("🙋 CRM: клиент %s просит менеджера (лид #%d). Возьмите диалог в карточке.",
+	var mention string
+	if p.deps.Panel != nil {
+		mention = mentionPrefix(p.deps.Panel.String(ctx, settings.KeyManagerMention))
+	}
+	text := mention + fmt.Sprintf("🙋 CRM: клиент %s просит менеджера (лид #%d). Возьмите диалог в карточке.",
 		leadDisplayName(lead), lead.ID)
 	if link := leadCardURL(p.deps.PublicURL, lead.ID); link != "" {
 		text += "\nОткрыть диалог: " + link
@@ -593,6 +597,17 @@ func leadCardURL(base string, id int64) string {
 		return ""
 	}
 	return fmt.Sprintf("%s/?lead=%d", strings.TrimRight(base, "/"), id)
+}
+
+// mentionPrefix — «@username » перед текстом уведомления менеджеру
+// (emma_panel.manager_mention): упоминание пробивает mute группы в Telegram.
+// Пустая настройка — без префикса; «@» на случай ручного ввода с собакой.
+func mentionPrefix(mention string) string {
+	m := strings.TrimSpace(mention)
+	if m == "" {
+		return ""
+	}
+	return "@" + strings.TrimPrefix(m, "@") + " "
 }
 
 // leadDisplayName — имя лида для уведомления: name → @username → #id.

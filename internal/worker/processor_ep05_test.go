@@ -237,6 +237,7 @@ func TestEP05_StartEmptyWelcomeFallsThrough(t *testing.T) {
 // сообщением.
 func TestEP05_HandoffMarker(t *testing.T) {
 	panel := ep05Scenario()
+	panel[settings.KeyManagerMention] = "manager_ivan" // эскалация: @упоминание
 	rig := newEP05Rig(t, ep05Lead(models.DialogModeBot), "позовите живого человека",
 		panel, &fakeAI{reply: "Конечно, сейчас позову менеджера. {{handoff}}"})
 
@@ -267,8 +268,9 @@ func TestEP05_HandoffMarker(t *testing.T) {
 		t.Errorf("emma_events handoff: %+v", got)
 	}
 	if n := rig.managerNotices(); len(n) != 1 || !strings.Contains(n[0].text, "лид #7") ||
-		!strings.Contains(n[0].text, "https://crm.example.test/?lead=7") {
-		t.Errorf("уведомление менеджерам (текст + deep-link): %+v", n)
+		!strings.Contains(n[0].text, "https://crm.example.test/?lead=7") ||
+		!strings.HasPrefix(n[0].text, "@manager_ivan ") {
+		t.Errorf("уведомление менеджерам (упоминание + текст + deep-link): %+v", n)
 	}
 }
 

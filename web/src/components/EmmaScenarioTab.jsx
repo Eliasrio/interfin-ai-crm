@@ -34,7 +34,8 @@ export default function EmmaScenarioTab({ onDirty }) {
     (draft.welcome_text !== base.welcome_text ||
       draft.manager_button_enabled !== base.manager_button_enabled ||
       draft.manager_button_text !== base.manager_button_text ||
-      draft.handoff_confirm_text !== base.handoff_confirm_text)
+      draft.handoff_confirm_text !== base.handoff_confirm_text ||
+      draft.manager_mention !== base.manager_mention)
 
   useEffect(() => {
     onDirty(Boolean(dirty))
@@ -57,6 +58,7 @@ export default function EmmaScenarioTab({ onDirty }) {
         manager_button_enabled: draft.manager_button_enabled,
         manager_button_text: draft.manager_button_text,
         handoff_confirm_text: draft.handoff_confirm_text,
+        manager_mention: draft.manager_mention,
       })
       load(d)
       store.pushAlert('ok', 'Сохранено, Эмма подхватит в течение 30 секунд')
@@ -122,6 +124,20 @@ export default function EmmaScenarioTab({ onDirty }) {
           onChange={(e) => setDraft({ ...draft, handoff_confirm_text: e.target.value })}
         />
         <small className="muted">Эмма отвечает так на кнопку менеджера и на распознанную просьбу позвать человека.</small>
+      </label>
+
+      <label className="emma-field">
+        <span className="emma-label">Упоминание менеджера в уведомлениях</span>
+        <input
+          aria-label="Упоминание менеджера"
+          placeholder="username (без @)"
+          value={draft.manager_mention}
+          onChange={(e) => setDraft({ ...draft, manager_mention: e.target.value })}
+        />
+        <small className="muted">
+          Telegram-ник менеджера: уведомления «клиент просит менеджера» будут начинаться с @упоминания — оно
+          присылает сигнал даже при выключенном звуке группы. Пусто — без упоминания.
+        </small>
       </label>
 
       <button className="btn btn-primary" disabled={!dirty || buttonInvalid || saving} onClick={apply}>

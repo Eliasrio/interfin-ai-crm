@@ -124,6 +124,62 @@ func TestTakeoverReminder_Fires(t *testing.T) {
 	}
 }
 
+// TestTakeoverReminder_RepeatEscalationAndMention — эскалация 2026-07-15:
+// повторные напоминания каждые repeat_minutes, пока очередной повтор
+// успевает до подхвата (отсчёт от первого напоминания); текст — с
+// @упоминанием (пробивает mute группы) и deep-link на карточку.
+func TestTakeoverReminder_RepeatEscalationAndMention(t *testing.T) {
+	rig := newTakeoverRig(m13Lead(models.DialogModeHuman, nil), m13History(41, "жду ответа"))
+	rig.handlers = NewTakeoverHandlers(TakeoverDeps{
+		Leads: rig.leads, Msgs: rig.msgs,
+		Settings: fakeSettings{
+			settings.KeyPickupMinutes:         10,
+			settings.KeyReminderRepeatMinutes: 4,
+		},
+		Enq: rig.enq, InboundEnq: rig.inbound, Sender: rig.snd,
+		ManagerChatID: testManagerChat,
+		PublicURL:     "https://crm.example.test",
+		Panel:         fakePanel{settings.KeyManagerMention: "manager_ivan"},
+		Pub:           rig.pub, Log: testLogger(),
+	})
+
+	// Первое напоминание (Repeat=0): 1×4 мин < 10 мин — повтор №1 взводится.
+	if err := rig.handlers.HandleReminder(context.Background(),
+		takeoverTask(t, queue.TypeTakeoverReminder, testPayload())); err != nil {
+		t.Fatalf("reminder: %v", err)
+	}
+	if len(rig.enq.reminders) != 1 || rig.enq.reminders[0].Repeat != 1 {
+		t.Fatalf("повтор №1 не взведён: %+v", rig.enq.reminders)
+	}
+	if d := rig.enq.delays[queue.TypeTakeoverReminder][0]; d != 4*time.Minute {
+		t.Errorf("delay повтора %v, ждали 4м (settings)", d)
+	}
+	if got := rig.snd.sent[0].text; !strings.HasPrefix(got, "@manager_ivan ") ||
+		!strings.Contains(got, "https://crm.example.test/?lead=7") {
+		t.Errorf("текст без упоминания/deep-link: %q", got)
+	}
+
+	// Повтор №1: 2×4 < 10 — взводится №2; повтор №2: 3×4 ≥ 10 — стоп.
+	if err := rig.handlers.HandleReminder(context.Background(),
+		takeoverTask(t, queue.TypeTakeoverReminder, rig.enq.reminders[0])); err != nil {
+		t.Fatalf("repeat 1: %v", err)
+	}
+	if len(rig.enq.reminders) != 2 || rig.enq.reminders[1].Repeat != 2 {
+		t.Fatalf("повтор №2 не взведён: %+v", rig.enq.reminders)
+	}
+	if err := rig.handlers.HandleReminder(context.Background(),
+		takeoverTask(t, queue.TypeTakeoverReminder, rig.enq.reminders[1])); err != nil {
+		t.Fatalf("repeat 2: %v", err)
+	}
+	if len(rig.enq.reminders) != 2 {
+		t.Fatalf("повтор №3 не должен взводиться (12 мин ≥ подхват 10): %+v", rig.enq.reminders)
+	}
+	// Уведомлений ушло три — по одному на каждое сработавшее напоминание.
+	if rig.snd.sentCount() != 3 {
+		t.Errorf("уведомлений %d, ждали 3", rig.snd.sentCount())
+	}
+}
+
 // TestTakeoverReminder_NoopWhenManagerReplied — критерий 5: менеджер ответил
 // внутри окна → ни уведомления, ни подхвата.
 func TestTakeoverReminder_NoopWhenManagerReplied(t *testing.T) {

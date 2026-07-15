@@ -9,6 +9,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -45,6 +46,7 @@ func (h *ScenarioHandler) scenarioJSON(ctx context.Context) gin.H {
 		"manager_button_enabled": h.deps.Settings.String(ctx, settings.KeyManagerButtonEnabled) == "true",
 		"manager_button_text":    h.deps.Settings.String(ctx, settings.KeyManagerButtonText),
 		"handoff_confirm_text":   h.deps.Settings.String(ctx, settings.KeyHandoffConfirmText),
+		"manager_mention":        h.deps.Settings.String(ctx, settings.KeyManagerMention),
 	}
 }
 
@@ -60,7 +62,12 @@ type patchScenarioReq struct {
 	ManagerButtonEnabled *bool   `json:"manager_button_enabled"`
 	ManagerButtonText    *string `json:"manager_button_text"`
 	HandoffConfirmText   *string `json:"handoff_confirm_text"`
+	ManagerMention       *string `json:"manager_mention"`
 }
+
+// mentionRe — telegram-username: 5-32 символа, латиница/цифры/подчёркивание
+// (валидация manager_mention; ведущая @ срезается до проверки).
+var mentionRe = regexp.MustCompile(`^[A-Za-z0-9_]{5,32}$`)
 
 // PATCH /api/emma/scenario — частичное обновление ключей settings.
 // Инвариант вкладки 5: включённая кнопка обязана иметь текст — проверяется
@@ -73,7 +80,8 @@ func (h *ScenarioHandler) patch(c *gin.Context) {
 		return
 	}
 	if req.WelcomeText == nil && req.ManagerButtonEnabled == nil &&
-		req.ManagerButtonText == nil && req.HandoffConfirmText == nil {
+		req.ManagerButtonText == nil && req.HandoffConfirmText == nil &&
+		req.ManagerMention == nil {
 		apiError(c, http.StatusBadRequest, "нужно хотя бы одно поле", codeValidation)
 		return
 	}
@@ -113,6 +121,16 @@ func (h *ScenarioHandler) patch(c *gin.Context) {
 	if req.HandoffConfirmText != nil {
 		v := strings.TrimSpace(*req.HandoffConfirmText)
 		writes[settings.KeyHandoffConfirmText] = &v
+	}
+	if req.ManagerMention != nil {
+		// Храним без @ (воркер добавляет сам); пусто = упоминание выключено.
+		v := strings.TrimPrefix(strings.TrimSpace(*req.ManagerMention), "@")
+		if v != "" && !mentionRe.MatchString(v) {
+			apiError(c, http.StatusBadRequest,
+				"упоминание менеджера: telegram-username из 5-32 латинских букв/цифр/подчёркиваний", codeValidation)
+			return
+		}
+		writes[settings.KeyManagerMention] = &v
 	}
 	for key, val := range writes {
 		if err := h.deps.Settings.SetString(ctx, key, *val); err != nil {

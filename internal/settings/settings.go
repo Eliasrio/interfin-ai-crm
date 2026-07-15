@@ -32,14 +32,20 @@ const (
 	// KeyPickupMinutes — через сколько минут после напоминания Эмма
 	// подхватывает диалог сама, если менеджер так и не ответил.
 	KeyPickupMinutes = "takeover.pickup_minutes"
+	// KeyReminderRepeatMinutes — интервал ПОВТОРНЫХ напоминаний менеджеру
+	// внутри окна до подхвата (эскалация: менеджер не заметил первое).
+	// Повторы прекращаются, когда очередной не успевает до pickup.
+	KeyReminderRepeatMinutes = "takeover.reminder_repeat_minutes"
 )
 
 // Defaults — значение ключа при отсутствии строки в settings (тайминги
-// владельца: пауза 30, напоминание 10, подхват 10 — task M13).
+// владельца: пауза 30, напоминание 10, подхват 10 — task M13; повтор 5 —
+// эскалация 2026-07-15).
 var Defaults = map[string]int{
-	KeyHybridPauseMinutes: 30,
-	KeyReminderMinutes:    10,
-	KeyPickupMinutes:      10,
+	KeyHybridPauseMinutes:    30,
+	KeyReminderMinutes:       10,
+	KeyPickupMinutes:         10,
+	KeyReminderRepeatMinutes: 5,
 }
 
 // Строковые ключи панели Эммы (EP-01, ТЗ EMMA_PANEL_TZ_v2 §5).
@@ -59,6 +65,9 @@ const (
 	KeyHandoffConfirmText = "emma_panel.handoff_confirm_text"
 	// KeyAlertChatID — Telegram-чат владельца для алертов Эммы (EP-06).
 	KeyAlertChatID = "emma_panel.alert_chat_id"
+	// KeyManagerMention — telegram-username (без @) для упоминания в
+	// уведомлениях менеджеру: упоминание пробивает mute группы. Пусто = выкл.
+	KeyManagerMention = "emma_panel.manager_mention"
 )
 
 // StringDefaults — дефолты строковых ключей (EP-01 §2 task-файла).
@@ -71,6 +80,7 @@ var StringDefaults = map[string]string{
 	KeyManagerButtonText:    "Связаться с менеджером",
 	KeyHandoffConfirmText:   "Сейчас свяжу вас с менеджером, ожидайте",
 	KeyAlertChatID:          "",
+	KeyManagerMention:       "",
 }
 
 // Границы значений для PATCH /api/settings: минуты 1..1440 (сутки).

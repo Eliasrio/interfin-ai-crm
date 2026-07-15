@@ -43,6 +43,9 @@ type TakeoverDeps struct {
 	// PublicURL — базовый адрес CRM для deep-link на карточку лида в
 	// напоминании (config.Telegram.PublicBaseURL); "" = без ссылки.
 	PublicURL string
+	// Panel — строковые ключи панели (emma_panel.manager_mention для
+	// упоминания в напоминаниях); nil — без упоминания (юнит-тесты M13).
+	Panel PanelSettings
 	Pub           events.Publisher
 	Log           *slog.Logger
 }
@@ -71,19 +74,37 @@ func (h *TakeoverHandlers) HandleReminder(ctx context.Context, t *asynq.Task) er
 		return err
 	}
 
-	// Порядок: сперва взводится подхват, потом уведомление. Упавшее
-	// уведомление ретраит задачу целиком — повторный взвод погасит
-	// ErrDuplicate, а подхват уже гарантирован.
-	pickupDelay := time.Duration(d.Settings.Minutes(ctx, settings.KeyPickupMinutes)) * time.Minute
-	err = d.Enq.EnqueueTakeoverPickup(ctx, p, pickupDelay)
+	// Порядок: сперва взводится подхват и следующий повтор, потом
+	// уведомление. Упавший шаг ретраит задачу целиком — повторные взводы
+	// гасятся ErrDuplicate, а подхват уже гарантирован.
+	pickupMin := d.Settings.Minutes(ctx, settings.KeyPickupMinutes)
+	err = d.Enq.EnqueueTakeoverPickup(ctx, p, time.Duration(pickupMin)*time.Minute)
 	if err != nil && !errors.Is(err, queue.ErrDuplicate) {
 		return fmt.Errorf("worker: takeover: постановка подхвата: %w", err)
 	}
 
+	// Эскалация: повторное напоминание каждые repeat_minutes, пока очередной
+	// повтор успевает до подхвата Эммой (отсчёт от ПЕРВОГО напоминания —
+	// подхват взводится при нём же). Ответ менеджера гасит повтор в
+	// waitingLead, смена настроек между повторами даёт приближение — ок.
+	repeatMin := d.Settings.Minutes(ctx, settings.KeyReminderRepeatMinutes)
+	if repeatMin > 0 && (p.Repeat+1)*repeatMin < pickupMin {
+		next := p
+		next.Repeat++
+		err = d.Enq.EnqueueTakeoverReminder(ctx, next, time.Duration(repeatMin)*time.Minute)
+		if err != nil && !errors.Is(err, queue.ErrDuplicate) {
+			return fmt.Errorf("worker: takeover: постановка повторного напоминания: %w", err)
+		}
+	}
+
 	waiting := waitingMinutes(p.InboundAt)
-	remind := fmt.Sprintf(
-		"⏰ CRM: лид #%d ждёт ответа менеджера уже %d мин (Эмма молчит: диалог взят в работу или на паузе).\nОтветьте из карточки — иначе через %d мин Эмма подхватит сама.",
-		p.LeadID, waiting, d.Settings.Minutes(ctx, settings.KeyPickupMinutes))
+	var mention string
+	if d.Panel != nil {
+		mention = mentionPrefix(d.Panel.String(ctx, settings.KeyManagerMention))
+	}
+	remind := mention + fmt.Sprintf(
+		"⏰ CRM: лид #%d ждёт ответа менеджера уже %d мин (Эмма молчит: диалог взят в работу или на паузе).\nОтветьте из карточки — иначе Эмма подхватит сама.",
+		p.LeadID, waiting)
 	if link := leadCardURL(d.PublicURL, p.LeadID); link != "" {
 		remind += "\nОткрыть диалог: " + link
 	}
@@ -98,7 +119,7 @@ func (h *TakeoverHandlers) HandleReminder(ctx context.Context, t *asynq.Task) er
 	}, log)
 
 	log.Info("worker: напоминание менеджеру отправлено",
-		"waiting_minutes", waiting, "pickup_in", pickupDelay.String())
+		"waiting_minutes", waiting, "repeat", p.Repeat, "pickup_minutes", pickupMin)
 	return nil
 }
 

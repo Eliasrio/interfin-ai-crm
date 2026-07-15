@@ -60,7 +60,7 @@ func TestTakeoverChain_LiveQueue(t *testing.T) {
 	if ai.callCount() != 0 || snd.sentCount() != 0 {
 		t.Fatal("в режиме human Эмма обязана молчать")
 	}
-	reminder, err := insp.GetTaskInfo("default", queue.TakeoverReminderKey(7, 3))
+	reminder, err := insp.GetTaskInfo("default", queue.TakeoverReminderKey(7, 3, 0))
 	if err != nil {
 		t.Fatalf("takeover:reminder не в очереди: %v", err)
 	}
