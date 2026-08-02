@@ -129,6 +129,17 @@ emma: # EP-03: файловое хранилище панели Эммы (ТЗ �
   # отправки клиентам (EP-04). В Docker сюда монтируется volume emma_data.
   data_dir: ${EMMA_DATA_DIR}
 
+public_lead: # заявки с формы сайта borninbrazil.baby: POST /api/public/lead (без auth)
+  # CORS-allowlist формы; пустой список = эндпоинт выключен. localhost:8791 —
+  # локальный превью сайта (~/borninnbrazillbaby), для сквозной проверки.
+  allowed_origins:
+    - https://borninbrazil.baby
+    - https://www.borninbrazil.baby
+    - http://localhost:8791
+  # Заявок в минуту с одного IP (форма — действие ручное и редкое; ключи
+  # public:<ip> в Redis, бюджет /api §4.2 не задевается). 0 = выключен.
+  rate_limit_per_min: 5
+
 monitoring:
   # M11 §14: /metrics живёт на ОТДЕЛЬНОМ listener'е этого порта (не на
   # server.port) за IP-allowlist'ом; наружу порт не публикуется, внешний

@@ -16,6 +16,7 @@ const (
 	codeInvalidTransition = "ERR_INVALID_TRANSITION" // 400: переход запрещён §3.1
 	codeNotFound          = "ERR_NOT_FOUND"          // 404
 	codeStageConflict     = "ERR_STAGE_CONFLICT"     // 409: state conflict
+	codeOriginForbidden   = "ERR_ORIGIN_FORBIDDEN"   // 403: чужой Origin на /api/public (CORS-allowlist)
 	codeRateLimited       = "ERR_RATE_LIMITED"       // 429: 100 req/min per IP
 	codeInternal          = "ERR_INTERNAL"           // 500
 	codeTelegramSend      = "ERR_TELEGRAM_SEND"      // 502: Telegram не принял отправку (M12)

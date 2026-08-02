@@ -416,6 +416,32 @@ func run(log *slog.Logger) error {
 	handlers.NewSettings(handlers.SettingsDeps{Svc: settingsSvc, Log: log}).
 		Register(api)
 
+	// --- Публичный приём заявок с сайта borninbrazil.baby: группа
+	// /api/public РЯДОМ с /api (JWT-гейт M8 не распространяется), защита —
+	// CORS-allowlist + свой rate limit по IP (ключи public:<ip>). Пустой
+	// allowlist в конфиге — эндпоинт не регистрируется.
+	if len(cfg.PublicLead.AllowedOrigins) > 0 {
+		var publicLimiter handlers.RateLimiter
+		if cfg.PublicLead.RateLimitPerMin > 0 {
+			publicLimiter = handlers.NewRedisRateLimiter(rdb, cfg.PublicLead.RateLimitPerMin)
+		}
+		handlers.NewPublicLead(handlers.PublicLeadDeps{
+			Leads:          leads,
+			Msgs:           msgs,
+			Sender:         sender,
+			Pub:            pub,
+			Limiter:        publicLimiter,
+			AllowedOrigins: cfg.PublicLead.AllowedOrigins,
+			ManagerChatID:  cfg.Telegram.ManagerChatID,
+			PublicURL:      cfg.Telegram.PublicBaseURL(),
+			Panel:          settingsSvc,
+			Log:            log,
+		}).Register(router)
+		log.Info("public lead endpoint registered",
+			"origins", cfg.PublicLead.AllowedOrigins,
+			"rate_limit_per_min", cfg.PublicLead.RateLimitPerMin)
+	}
+
 	// --- EP-01: панель Эммы — /api/emma/* только для admin, поверх PIN
 	// (ТЗ EMMA_PANEL_TZ_v2 §2). Группа живёт внутри /api: rate limit и JWT
 	// наследуются, RequireRole(admin) поверх — manager получает 403 на всё,

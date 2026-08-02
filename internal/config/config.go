@@ -35,6 +35,18 @@ type Config struct {
 	LGPD       LGPDConfig       `mapstructure:"lgpd"`
 	Monitoring MonitoringConfig `mapstructure:"monitoring"`
 	Emma       EmmaConfig       `mapstructure:"emma"`
+	PublicLead PublicLeadConfig `mapstructure:"public_lead"`
+}
+
+// PublicLeadConfig — публичный приём заявок с сайта borninbrazil.baby
+// (POST /api/public/lead, без auth). Пустой allowed_origins = эндпоинт
+// не регистрируется вовсе (юнит-тестовые yaml без секции валидны).
+type PublicLeadConfig struct {
+	// AllowedOrigins — CORS-allowlist формы сайта (scheme://host[:port]).
+	AllowedOrigins []string `mapstructure:"allowed_origins"`
+	// RateLimitPerMin — заявок в минуту с одного IP (ключи public:<ip>,
+	// бюджет /api §4.2 не задевается). 0 = лимит выключен.
+	RateLimitPerMin int `mapstructure:"rate_limit_per_min"`
 }
 
 // EmmaConfig — файловое хранилище панели Эммы (EP-03, ТЗ §2.3).
@@ -474,6 +486,23 @@ func (c *Config) validate() error {
 					problems = append(problems, fmt.Sprintf(
 						"monitoring.metrics_ip_allowlist: %q не CIDR и не IP", cidr))
 				}
+			}
+		}
+	}
+
+	// Публичный приём заявок: секция проверяется, когда заполнен allowlist
+	// (без него эндпоинт не регистрируется — проверять нечего).
+	if pl := c.PublicLead; len(pl.AllowedOrigins) > 0 {
+		if pl.RateLimitPerMin < 0 {
+			problems = append(problems, fmt.Sprintf(
+				"public_lead.rate_limit_per_min отрицателен: %d", pl.RateLimitPerMin))
+		}
+		for _, o := range pl.AllowedOrigins {
+			u, err := url.Parse(o)
+			if err != nil || (u.Scheme != "http" && u.Scheme != "https") ||
+				u.Host == "" || u.Path != "" {
+				problems = append(problems, fmt.Sprintf(
+					"public_lead.allowed_origins: %q не origin вида scheme://host[:port]", o))
 			}
 		}
 	}
